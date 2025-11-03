@@ -27,17 +27,22 @@ const App = () => {
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [mediaFiles, setMediaFiles] = useState([]);
   const [selectedCategory, setSelectedCategory] = useState('action');
-  const [userLocation, setUserLocation] = useState({ lat: 12.9716, lng: 77.5946 }); // Default: Bangalore
+  const [userLocation, setUserLocation] = useState({ lat: 12.9716, lng: 77.5946 });
   const [weather, setWeather] = useState(null);
   const [weatherAlerts, setWeatherAlerts] = useState([]);
-  const [meshStatus, setMeshStatus] = useState('disconnected'); // 'connected', 'disconnected', 'connecting'
+  const [meshStatus, setMeshStatus] = useState('disconnected');
   const [meshPeers, setMeshPeers] = useState([]);
   const [meshMessages, setMeshMessages] = useState([]);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [meshNode, setMeshNode] = useState(null);
+  const [showLocationDialog, setShowLocationDialog] = useState(false);
+  const [locationPermission, setLocationPermission] = useState('prompt');
+  const [showEmergencyCallMenu, setShowEmergencyCallMenu] = useState(false);
+  const [selectedEmergencyType, setSelectedEmergencyType] = useState(null);
 
-  // Replace with your OpenWeatherMap API key
-  const WEATHER_API_KEY = 'YOUR_API_KEY_HERE';
+  // STEP 1: Replace with your WeatherAPI.com API key
+  const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
+
 
   // Mesh Network Manager
   const MeshNetworkManager = useCallback(() => {
@@ -47,15 +52,12 @@ const App = () => {
 
     const connect = () => {
       try {
-        // Try to connect to local Yggdrasil node
-        // In production, this would connect to your Yggdrasil service
-        ws = new WebSocket('ws://localhost:9001'); // Local Yggdrasil WebSocket
+        ws = new WebSocket('ws://localhost:9001');
         
         ws.onopen = () => {
           console.log('Mesh network connected');
           setMeshStatus('connected');
           
-          // Send initial handshake
           const handshake = {
             type: 'handshake',
             peerId: generatePeerId(),
@@ -64,7 +66,6 @@ const App = () => {
           };
           ws.send(JSON.stringify(handshake));
           
-          // Start heartbeat
           heartbeatTimer = setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'heartbeat' }));
@@ -91,9 +92,8 @@ const App = () => {
           setMeshStatus('disconnected');
           clearInterval(heartbeatTimer);
           
-          // Attempt to reconnect
           reconnectTimer = setTimeout(() => {
-            if (!isOnline) { // Only reconnect if still offline
+            if (!isOnline) {
               setMeshStatus('connecting');
               connect();
             }
@@ -102,8 +102,6 @@ const App = () => {
       } catch (error) {
         console.error('Failed to connect to mesh network:', error);
         setMeshStatus('disconnected');
-        
-        // Simulate mesh network for demo purposes
         simulateMeshNetwork();
       }
     };
@@ -119,12 +117,10 @@ const App = () => {
     return { connect, disconnect };
   }, [userLocation, isOnline]);
 
-  // Generate unique peer ID
   const generatePeerId = () => {
     return 'peer_' + Math.random().toString(36).substr(2, 9);
   };
 
-  // Handle incoming mesh messages
   const handleMeshMessage = (message) => {
     switch (message.type) {
       case 'peer_list':
@@ -132,7 +128,6 @@ const App = () => {
         break;
       case 'emergency_broadcast':
         setMeshMessages(prev => [...prev, message]);
-        // Show notification
         if (Notification.permission === 'granted') {
           new Notification('Emergency Alert via Mesh', {
             body: message.content,
@@ -141,11 +136,9 @@ const App = () => {
         }
         break;
       case 'resource_share':
-        // Update local resource list
         console.log('Resource shared:', message.resource);
         break;
       case 'location_update':
-        // Update peer locations on map
         setMeshPeers(prev => 
           prev.map(p => p.id === message.peerId ? { ...p, location: message.location } : p)
         );
@@ -155,11 +148,8 @@ const App = () => {
     }
   };
 
-  // Simulate mesh network for demo
   const simulateMeshNetwork = () => {
     setMeshStatus('connected');
-    
-    // Simulate some nearby peers
     const mockPeers = [
       { id: 'peer_1', name: 'Emergency Responder 1', distance: 0.5, type: 'responder' },
       { id: 'peer_2', name: 'Medical Team', distance: 1.2, type: 'medical' },
@@ -168,7 +158,6 @@ const App = () => {
     setMeshPeers(mockPeers);
   };
 
-  // Broadcast emergency message over mesh
   const broadcastEmergencyMesh = (message) => {
     if (meshNode && meshNode.connect) {
       const broadcast = {
@@ -180,7 +169,6 @@ const App = () => {
       };
       
       try {
-        // In production, this would send through Yggdrasil
         console.log('Broadcasting via mesh:', broadcast);
         setMeshMessages(prev => [...prev, broadcast]);
         return true;
@@ -192,7 +180,6 @@ const App = () => {
     return false;
   };
 
-  // Monitor online/offline status
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
@@ -202,7 +189,6 @@ const App = () => {
     const handleOffline = () => {
       setIsOnline(false);
       setMeshStatus('connecting');
-      // Try to connect to mesh network
       const network = MeshNetworkManager();
       network.connect();
       setMeshNode(network);
@@ -211,12 +197,10 @@ const App = () => {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // Request notification permission
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
 
-    // Check if offline on load
     if (!navigator.onLine) {
       handleOffline();
     }
@@ -230,7 +214,6 @@ const App = () => {
     };
   }, [MeshNetworkManager]);
 
-  // Get user location
   useEffect(() => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
@@ -239,78 +222,117 @@ const App = () => {
             lat: position.coords.latitude,
             lng: position.coords.longitude
           });
+          setLocationPermission('granted');
         },
         (error) => {
           console.log('Location access denied, using default location');
+          setLocationPermission('denied');
         }
       );
     }
   }, []);
 
-  // Fetch weather data
+  const requestLocationPermission = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          setUserLocation({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude
+          });
+          setLocationPermission('granted');
+          setShowLocationDialog(false);
+        },
+        (error) => {
+          console.log('Location access denied');
+          setLocationPermission('denied');
+          setShowLocationDialog(false);
+        }
+      );
+    }
+  };
+
   useEffect(() => {
     const fetchWeather = async () => {
-      if (!WEATHER_API_KEY || WEATHER_API_KEY === 'YOUR_API_KEY_HERE') {
-        // Mock weather data if no API key
+      if (!WEATHER_API_KEY || WEATHER_API_KEY === 'YOUR_WEATHERAPI_KEY_HERE') {
+        console.warn('⚠️ Weather API key not configured. Using mock data. Get your free key at https://www.weatherapi.com/');
         setWeather({
           temp: 28,
-          condition: 'Partly Cloudy',
+          condition: 'Partly Cloudy (Mock Data)',
           humidity: 65,
           windSpeed: 12,
           feelsLike: 30
         });
         setWeatherAlerts([
-          { type: 'Heavy Rainfall', severity: 'high', intensity: '50+ mm/hr', duration: '+2 hours' }
+          { 
+            type: 'Heavy Rainfall', 
+            severity: 'Moderate',
+            category: 'Heavy rain',
+            headline: 'Heavy rain expected (Sample Alert)',
+            areas: 'Local area',
+            effective: new Date().toISOString(),
+            expires: new Date(Date.now() + 7200000).toISOString(),
+            description: 'This is sample mock data. Add your WeatherAPI.com key to see real weather alerts.'
+          }
         ]);
         return;
       }
 
       try {
+        console.log('Fetching live weather data from WeatherAPI.com...');
         const weatherRes = await fetch(
-          `https://api.openweathermap.org/data/2.5/weather?lat=${userLocation.lat}&lon=${userLocation.lng}&appid=${WEATHER_API_KEY}&units=metric`
+          `https://api.weatherapi.com/v1/forecast.json?key=${WEATHER_API_KEY}&q=${userLocation.lat},${userLocation.lng}&days=1&aqi=no&alerts=yes`
         );
         const weatherData = await weatherRes.json();
         
+        if (weatherData.error) {
+          console.error('Weather API Error:', weatherData.error.message);
+          throw new Error(weatherData.error.message);
+        }
+        
+        console.log('✓ Live weather data loaded successfully');
         setWeather({
-          temp: Math.round(weatherData.main.temp),
-          condition: weatherData.weather[0].main,
-          humidity: weatherData.main.humidity,
-          windSpeed: Math.round(weatherData.wind.speed * 3.6), // Convert to km/h
-          feelsLike: Math.round(weatherData.main.feels_like)
+          temp: Math.round(weatherData.current.temp_c),
+          condition: weatherData.current.condition.text,
+          humidity: weatherData.current.humidity,
+          windSpeed: Math.round(weatherData.current.wind_kph),
+          feelsLike: Math.round(weatherData.current.feelslike_c)
         });
 
-        // Fetch weather alerts
-        const alertsRes = await fetch(
-          `https://api.openweathermap.org/data/2.5/onecall?lat=${userLocation.lat}&lon=${userLocation.lng}&appid=${WEATHER_API_KEY}&exclude=minutely,hourly,daily`
-        );
-        const alertsData = await alertsRes.json();
-        
-        if (alertsData.alerts) {
-          setWeatherAlerts(alertsData.alerts.map(alert => ({
-            type: alert.event,
-            severity: 'high',
-            description: alert.description
+        if (weatherData.alerts && weatherData.alerts.alert && weatherData.alerts.alert.length > 0) {
+          console.log('⚠️ Active weather alerts found:', weatherData.alerts.alert.length);
+          setWeatherAlerts(weatherData.alerts.alert.map(alert => ({
+            type: alert.event || 'Weather Alert',
+            severity: alert.severity || 'Moderate',
+            category: alert.category || 'General',
+            headline: alert.headline || alert.event,
+            areas: alert.areas || 'Local area',
+            effective: alert.effective,
+            expires: alert.expires,
+            description: alert.desc || alert.instruction || 'Weather alert in effect.'
           })));
+        } else {
+          console.log('✓ No active weather alerts');
+          setWeatherAlerts([]);
         }
       } catch (error) {
-        console.error('Weather fetch error:', error);
-        // Use mock data on error
+        console.error('Failed to fetch weather data:', error);
         setWeather({
           temp: 28,
-          condition: 'Partly Cloudy',
+          condition: 'Data Unavailable',
           humidity: 65,
           windSpeed: 12,
           feelsLike: 30
         });
+        setWeatherAlerts([]);
       }
     };
 
     if (isOnline) {
       fetchWeather();
-      const interval = setInterval(fetchWeather, 600000); // Update every 10 minutes
+      const interval = setInterval(fetchWeather, 600000);
       return () => clearInterval(interval);
     } else {
-      // Use cached/mock data when offline
       setWeather({
         temp: 28,
         condition: 'Offline Mode',
@@ -319,7 +341,7 @@ const App = () => {
         feelsLike: 30
       });
     }
-  }, [userLocation, isOnline]);
+  }, [userLocation, isOnline, WEATHER_API_KEY]);
 
   useEffect(() => {
     if (currentScreen === 'splash') {
@@ -365,6 +387,92 @@ const App = () => {
     ]
   };
 
+  const emergencyContacts = {
+    medical: {
+      title: 'Medical Emergency',
+      icon: '🏥',
+      color: 'bg-red-600',
+      numbers: [
+        { name: 'Emergency Ambulance', number: '108', description: 'Free ambulance service' },
+        { name: 'National Emergency', number: '112', description: 'All emergency services' },
+        { name: 'Private Ambulance', number: '102', description: 'Alternative ambulance' }
+      ]
+    },
+    police: {
+      title: 'Police/Crime',
+      icon: '👮',
+      color: 'bg-blue-600',
+      numbers: [
+        { name: 'Police Emergency', number: '100', description: 'Police control room' },
+        { name: 'National Emergency', number: '112', description: 'All emergency services' },
+        { name: 'Women Helpline', number: '1091', description: 'Women safety' }
+      ]
+    },
+    fire: {
+      title: 'Fire Emergency',
+      icon: '🔥',
+      color: 'bg-orange-600',
+      numbers: [
+        { name: 'Fire Service', number: '101', description: 'Fire department' },
+        { name: 'National Emergency', number: '112', description: 'All emergency services' }
+      ]
+    },
+    accident: {
+      title: 'Road Accident',
+      icon: '🚗',
+      color: 'bg-yellow-600',
+      numbers: [
+        { name: 'National Emergency', number: '112', description: 'All emergency services' },
+        { name: 'Ambulance', number: '108', description: 'Medical assistance' },
+        { name: 'Police', number: '100', description: 'Traffic police' }
+      ]
+    },
+    disaster: {
+      title: 'Natural Disaster',
+      icon: '🌊',
+      color: 'bg-purple-600',
+      numbers: [
+        { name: 'National Emergency', number: '112', description: 'All emergency services' },
+        { name: 'Disaster Helpline', number: '1078', description: 'Disaster management' },
+        { name: 'NDRF', number: '011-24363260', description: 'National disaster response' }
+      ]
+    },
+    earthquake: {
+      title: 'Earthquake',
+      icon: '🏚️',
+      color: 'bg-red-700',
+      numbers: [
+        { name: 'National Emergency', number: '112', description: 'All emergency services' },
+        { name: 'Disaster Helpline', number: '1078', description: 'Disaster management' },
+        { name: 'NDRF', number: '011-24363260', description: 'Rescue operations' }
+      ]
+    },
+    flood: {
+      title: 'Flood Emergency',
+      icon: '🌊',
+      color: 'bg-blue-700',
+      numbers: [
+        { name: 'National Emergency', number: '112', description: 'All emergency services' },
+        { name: 'Flood Control', number: '1070', description: 'Flood control room' },
+        { name: 'NDRF', number: '011-24363260', description: 'Rescue operations' }
+      ]
+    },
+    mental: {
+      title: 'Mental Health Crisis',
+      icon: '🧠',
+      color: 'bg-teal-600',
+      numbers: [
+        { name: 'Mental Health Helpline', number: '08046110007', description: 'Vandrevala Foundation' },
+        { name: 'iCall', number: '9152987821', description: 'TISS counseling' },
+        { name: 'NIMHANS', number: '080-46110007', description: 'Mental health support' }
+      ]
+    }
+  };
+
+  const makeEmergencyCall = (number) => {
+    window.location.href = `tel:${number}`;
+  };
+
   const events = [
     { id: 1, type: 'CVX - Cardiac Event', time: '2:00 - 3:00 PM', location: 'Greater Kailash, New Delhi', color: '#DC2626', lat: 28.5494, lng: 77.2381 },
     { id: 2, type: 'MVA - Motor Vehicle Accident', time: '1:30 - 2:30 PM', location: 'MG Road, Bangalore', color: '#EA580C', lat: 12.9756, lng: 77.6069 },
@@ -386,7 +494,7 @@ const App = () => {
   ];
 
   const calculateDistance = (lat1, lng1, lat2, lng2) => {
-    const R = 6371; // Earth's radius in km
+    const R = 6371;
     const dLat = (lat2 - lat1) * Math.PI / 180;
     const dLng = (lng2 - lng1) * Math.PI / 180;
     const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
@@ -394,15 +502,6 @@ const App = () => {
               Math.sin(dLng/2) * Math.sin(dLng/2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     return (R * c).toFixed(1);
-  };
-
-  // Map component to handle view changes
-  const MapViewController = ({ center, zoom }) => {
-    const map = useMap();
-    useEffect(() => {
-      map.setView(center, zoom);
-    }, [center, zoom, map]);
-    return null;
   };
 
   if (currentScreen === 'splash') {
@@ -431,7 +530,13 @@ const App = () => {
           <span className="text-sm font-medium">9:41</span>
           <span className="text-xs text-gray-500">Emergency Services</span>
           <div className="flex items-center gap-2">
-            {/* Network Status Indicator */}
+            <button 
+              onClick={() => setShowLocationDialog(true)}
+              className="relative"
+            >
+              <MapPin className={`w-4 h-4 ${locationPermission === 'granted' ? 'text-green-500' : locationPermission === 'denied' ? 'text-red-500' : 'text-gray-400'}`} />
+            </button>
+            
             {isOnline ? (
               <Wifi className="w-4 h-4 text-green-500" />
             ) : meshStatus === 'connected' ? (
@@ -443,7 +548,54 @@ const App = () => {
           </div>
         </div>
 
-        {/* Mesh Network Status Banner */}
+        {showLocationDialog && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-2xl p-6 max-w-sm w-full shadow-xl">
+              <div className="flex items-center gap-3 mb-4">
+                <MapPin className="w-6 h-6 text-blue-500" />
+                <h3 className="text-lg font-bold">Location Access</h3>
+              </div>
+              
+              {locationPermission === 'granted' ? (
+                <div>
+                  <p className="text-sm text-gray-600 mb-4">✓ Location access enabled</p>
+                  <div className="bg-green-50 p-3 rounded-lg mb-4">
+                    <p className="text-xs text-green-800 font-medium">📍 Current Location:</p>
+                    <p className="text-sm text-green-900 mt-1">Latitude: {userLocation.lat.toFixed(6)}</p>
+                    <p className="text-sm text-green-900">Longitude: {userLocation.lng.toFixed(6)}</p>
+                  </div>
+                  <p className="text-xs text-gray-500">Your location helps emergency services reach you faster.</p>
+                </div>
+              ) : locationPermission === 'denied' ? (
+                <div>
+                  <p className="text-sm text-gray-600 mb-4">⚠️ Location access denied</p>
+                  <div className="bg-red-50 p-3 rounded-lg mb-4 border border-red-200">
+                    <p className="text-xs text-red-800 font-medium">Using default location</p>
+                    <p className="text-xs text-red-700 mt-1">Enable location in browser settings for accurate emergency response</p>
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <p className="text-sm text-gray-600 mb-4">Allow R.E.A.C.H to access your location for accurate emergency services.</p>
+                  <button 
+                    onClick={requestLocationPermission}
+                    className="w-full bg-blue-500 text-white py-3 rounded-lg font-medium mb-2 hover:bg-blue-600"
+                  >
+                    Grant Permission
+                  </button>
+                </div>
+              )}
+              
+              <button 
+                onClick={() => setShowLocationDialog(false)}
+                className="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-medium hover:bg-gray-200"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        )}
+
         {!isOnline && meshStatus === 'connected' && (
           <div className="bg-blue-600 text-white px-4 py-2 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -460,16 +612,15 @@ const App = () => {
         )}
 
         {weather && weatherAlerts.length > 0 && (
-          <div onClick={() => setCurrentScreen('weatherAlert')} className="bg-red-700 text-white px-4 py-3 cursor-pointer hover:bg-red-800 transition-colors">
+          <div onClick={() => setCurrentScreen('weatherAlert')} className="bg-red-600 text-white px-4 py-3 cursor-pointer hover:bg-red-700 transition-colors">
             <div className="flex items-start gap-2">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
               <div className="flex-1">
                 <p className="font-semibold text-sm">Weather Alert: {weatherAlerts[0].type}</p>
                 <p className="text-xs opacity-90">Severity: {weatherAlerts[0].severity}</p>
-                {weatherAlerts[0].intensity && <p className="text-xs opacity-90">Intensity: {weatherAlerts[0].intensity}</p>}
               </div>
+              <button className="bg-white text-red-600 px-3 py-1 rounded text-xs font-medium">View Details</button>
             </div>
-            <button className="mt-2 bg-white text-red-700 px-3 py-1 rounded text-xs font-medium">▶ View Details</button>
           </div>
         )}
 
@@ -490,36 +641,13 @@ const App = () => {
                   <span>{weather.windSpeed} km/h</span>
                 </div>
                 <div className="flex items-center gap-1 justify-end">
-                  <CloudRain className="w-4 h-4" />
+                 <CloudRain className="w-4 h-4" />
                   <span>{weather.humidity}%</span>
                 </div>
               </div>
             </div>
           </div>
         )}
-
-        <div className="h-64 relative">
-          <MapContainer 
-            center={[userLocation.lat, userLocation.lng]} 
-            zoom={13} 
-            style={{ height: '100%', width: '100%' }}
-            scrollWheelZoom={false}
-          >
-            <TileLayer
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-            />
-            <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-              <Popup>Your Location</Popup>
-            </Marker>
-            <Circle center={[userLocation.lat, userLocation.lng]} radius={500} color="#3B82F6" fillOpacity={0.1} />
-          </MapContainer>
-          <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-[1000]">
-            <p className="text-xs text-gray-600">Your Location</p>
-            <p className="text-sm font-semibold">Lat: {userLocation.lat.toFixed(4)}</p>
-            <p className="text-sm font-semibold">Lng: {userLocation.lng.toFixed(4)}</p>
-          </div>
-        </div>
 
         <div className="p-4 space-y-4 pb-24">
           <button onClick={() => document.getElementById('mediaInput').click()} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
@@ -541,12 +669,39 @@ const App = () => {
             </div>
           </button>
 
-          <button className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
+          <button onClick={() => setShowEmergencyCallMenu(true)} className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors">
             <div className="flex items-center gap-3">
               <Phone className="w-5 h-5" />
-              <span className="font-medium">Audio Call</span>
+              <span className="font-medium">Emergency Call</span>
             </div>
           </button>
+
+          {showEmergencyCallMenu && (
+            <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-end justify-center">
+              <div className="bg-white rounded-t-3xl w-full max-h-[80vh] overflow-y-auto">
+                <div className="sticky top-0 bg-white border-b px-4 py-4 flex items-center justify-between">
+                  <h3 className="text-lg font-bold">Select Emergency Type</h3>
+                  <button onClick={() => setShowEmergencyCallMenu(false)} className="text-gray-500 text-2xl">×</button>
+                </div>
+                <div className="p-4 grid grid-cols-2 gap-3">
+                  {Object.entries(emergencyContacts).map(([key, emergency]) => (
+                    <button
+                      key={key}
+                      onClick={() => {
+                        setSelectedEmergencyType(key);
+                        setShowEmergencyCallMenu(false);
+                        setCurrentScreen('emergencyNumbers');
+                      }}
+                      className={`${emergency.color} text-white rounded-2xl p-4 text-center hover:opacity-90 transition-opacity`}
+                    >
+                      <div className="text-3xl mb-2">{emergency.icon}</div>
+                      <p className="font-semibold text-sm">{emergency.title}</p>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           <button className="w-full bg-green-600 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-green-700 transition-colors">
             <div className="flex items-center gap-3">
@@ -574,71 +729,166 @@ const App = () => {
     );
   }
 
+  if (currentScreen === 'emergencyNumbers' && selectedEmergencyType) {
+    const emergency = emergencyContacts[selectedEmergencyType];
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title={emergency.title} onBack={() => setCurrentScreen('home')} />
+        <div className="p-4 pb-24">
+          <div className={`${emergency.color} text-white rounded-2xl p-6 mb-4 text-center`}>
+            <div className="text-5xl mb-3">{emergency.icon}</div>
+            <h2 className="text-2xl font-bold">{emergency.title}</h2>
+            <p className="text-sm opacity-90 mt-2">Tap any number to call immediately</p>
+          </div>
+
+          <div className="space-y-3">
+            {emergency.numbers.map((contact, idx) => (
+              <button
+                key={idx}
+                onClick={() => makeEmergencyCall(contact.number)}
+                className="w-full bg-white rounded-2xl p-4 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="text-left flex-1">
+                    <h3 className="font-bold text-lg">{contact.name}</h3>
+                    <p className="text-sm text-gray-600">{contact.description}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl font-bold text-blue-600">{contact.number}</span>
+                    <Phone className="w-5 h-5 text-green-600" />
+                  </div>
+                </div>
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-6 bg-yellow-50 border border-yellow-200 rounded-2xl p-4">
+            <h3 className="font-bold text-yellow-900 mb-2">⚠️ Important</h3>
+            <ul className="text-sm text-yellow-800 space-y-1">
+              <li>• Stay calm and speak clearly</li>
+              <li>• Provide your exact location</li>
+              <li>• Describe the emergency situation</li>
+              <li>• Follow dispatcher instructions</li>
+            </ul>
+          </div>
+        </div>
+        <BottomNav currentScreen="home" setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
+
   if (currentScreen === 'weatherAlert') {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header title="Weather Alert" onBack={() => setCurrentScreen('home')} />
-        <div className="relative h-screen pb-24">
-          <div className="h-96">
+        <div className="relative pb-24">
+          <div className="h-96 relative">
             <MapContainer 
               center={[userLocation.lat, userLocation.lng]} 
-              zoom={10} 
+              zoom={8} 
               style={{ height: '100%', width: '100%' }}
             >
               <TileLayer
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; OpenStreetMap'
               />
-              <TileLayer
-                url="https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid={WEATHER_API_KEY}"
-                attribution='Weather data © OpenWeatherMap'
-              />
+              {WEATHER_API_KEY && WEATHER_API_KEY !== 'YOUR_WEATHERAPI_KEY_HERE' && (
+                <TileLayer
+                  url={`https://tile.openweathermap.org/map/precipitation_new/{z}/{x}/{y}.png?appid=${WEATHER_API_KEY}`}
+                  opacity={0.6}
+                />
+              )}
               <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
                 <Popup>Your Location</Popup>
               </Marker>
-              <Circle center={[userLocation.lat, userLocation.lng]} radius={5000} color="#DC2626" fillOpacity={0.2} />
+              <Circle center={[userLocation.lat, userLocation.lng]} radius={10000} color="#DC2626" fillOpacity={0.1} />
             </MapContainer>
+            <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-[1000]">
+              <p className="text-xs font-semibold text-red-600">⚠️ Active Weather Alert</p>
+            </div>
           </div>
+
           <div className="p-4 space-y-4">
-            {weatherAlerts.map((alert, idx) => (
-              <div key={idx} className="bg-red-700 text-white rounded-2xl p-4 shadow-lg">
-                <div className="flex items-start gap-2">
-                  <AlertCircle className="w-5 h-5 flex-shrink-0" />
-                  <div>
-                    <p className="font-bold text-lg">{alert.type}</p>
-                    <p className="text-sm mt-1">Severity: {alert.severity}</p>
-                    {alert.intensity && <p className="text-sm">Intensity: {alert.intensity}</p>}
-                    {alert.duration && <p className="text-sm">Duration: {alert.duration}</p>}
-                    {alert.description && <p className="text-xs mt-2 opacity-90">{alert.description}</p>}
+            {weatherAlerts.length > 0 ? (
+              weatherAlerts.map((alert, idx) => (
+                <div key={idx} className="bg-red-600 text-white rounded-2xl p-4 shadow-lg">
+                  <div className="flex items-start gap-2 mb-3">
+                    <AlertCircle className="w-6 h-6 flex-shrink-0" />
+                    <div className="flex-1">
+                      <p className="font-bold text-lg">{alert.headline || alert.type}</p>
+                      <p className="text-sm mt-1 opacity-90">Category: {alert.category}</p>
+                      <p className="text-sm opacity-90">Severity: {alert.severity}</p>
+                    </div>
+                  </div>
+                  
+                  {alert.description && (
+                    <div className="bg-white bg-opacity-20 rounded-lg p-3 mb-3">
+                      <p className="text-sm">{alert.description}</p>
+                    </div>
+                  )}
+                  
+                  {alert.areas && (
+                    <p className="text-xs opacity-75 mb-1">📍 Affected Areas: {alert.areas}</p>
+                  )}
+                  
+                  <div className="flex justify-between text-xs opacity-75 mt-2">
+                    {alert.effective && (
+                      <span>From: {new Date(alert.effective).toLocaleString()}</span>
+                    )}
+                    {alert.expires && (
+                      <span>Until: {new Date(alert.expires).toLocaleString()}</span>
+                    )}
                   </div>
                 </div>
+              ))
+            ) : (
+              <div className="bg-green-50 border border-green-200 rounded-2xl p-4 text-center">
+                <p className="text-green-800 font-medium">✓ No active weather alerts</p>
+                <p className="text-sm text-green-600 mt-1">Weather conditions are currently normal</p>
               </div>
-            ))}
+            )}
+
             {weather && (
-              <div className="bg-white rounded-2xl p-4">
-                <h3 className="font-bold mb-3">Current Conditions</h3>
+              <div className="bg-white rounded-2xl p-4 shadow-sm">
+                <h3 className="font-bold mb-3 flex items-center gap-2">
+                  <Cloud className="w-5 h-5 text-blue-500" />
+                  Current Conditions
+                </h3>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-blue-50 p-3 rounded-lg">
                     <Thermometer className="w-5 h-5 text-blue-600 mb-1" />
-                    <p className="text-sm text-gray-600">Temperature</p>
-                    <p className="text-xl font-bold">{weather.temp}°C</p>
+                    <p className="text-xs text-gray-600">Temperature</p>
+                    <p className="text-xl font-bold text-blue-900">{weather.temp}°C</p>
+                    <p className="text-xs text-gray-500">Feels like {weather.feelsLike}°C</p>
                   </div>
                   <div className="bg-cyan-50 p-3 rounded-lg">
                     <Wind className="w-5 h-5 text-cyan-600 mb-1" />
-                    <p className="text-sm text-gray-600">Wind Speed</p>
-                    <p className="text-xl font-bold">{weather.windSpeed} km/h</p>
+                    <p className="text-xs text-gray-600">Wind Speed</p>
+                    <p className="text-xl font-bold text-cyan-900">{weather.windSpeed} km/h</p>
                   </div>
                   <div className="bg-indigo-50 p-3 rounded-lg">
                     <CloudRain className="w-5 h-5 text-indigo-600 mb-1" />
-                    <p className="text-sm text-gray-600">Humidity</p>
-                    <p className="text-xl font-bold">{weather.humidity}%</p>
+                    <p className="text-xs text-gray-600">Humidity</p>
+                    <p className="text-xl font-bold text-indigo-900">{weather.humidity}%</p>
                   </div>
                   <div className="bg-purple-50 p-3 rounded-lg">
                     <Cloud className="w-5 h-5 text-purple-600 mb-1" />
-                    <p className="text-sm text-gray-600">Condition</p>
-                    <p className="text-lg font-bold">{weather.condition}</p>
+                    <p className="text-xs text-gray-600">Condition</p>
+                    <p className="text-base font-bold text-purple-900">{weather.condition}</p>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {weatherAlerts.length > 0 && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-2xl p-4">
+                <h3 className="font-bold mb-2 text-yellow-900">⚠️ Safety Tips</h3>
+                <ul className="text-sm text-yellow-800 space-y-1">
+                  <li>• Stay indoors if possible</li>
+                  <li>• Keep emergency contacts ready</li>
+                  <li>• Monitor weather updates regularly</li>
+                  <li>• Avoid travel unless necessary</li>
+                </ul>
               </div>
             )}
           </div>
