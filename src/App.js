@@ -1623,116 +1623,138 @@ onClick={() => {
     );
   }
 
-  if (currentScreen === 'eventDetail' && selectedEvent) {
-    return (
-      <div className="min-h-screen bg-gray-50">
-        <Header title="Event Details" onBack={() => setCurrentScreen('events')} />
-        <div className="h-64">
-          <MapContainer 
-            center={[selectedEvent.lat, selectedEvent.lng]} 
-            zoom={13} 
-            style={{ height: '100%', width: '100%' }}
-          >
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-              <Popup>Your Location</Popup>
-            </Marker>
-            <Marker position={[selectedEvent.lat, selectedEvent.lng]} icon={createCustomIcon(selectedEvent.color)}>
-              <Popup>{selectedEvent.type}</Popup>
-            </Marker>
-		<Polyline 
-              positions={[
-                [userLocation.lat, userLocation.lng],
-                [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.3, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.3],
-                [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.7, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.7],
-                [selectedEvent.lat, selectedEvent.lng]
-              ]} 
-              color="#3B82F6" 
-              weight={4}
-            />
-
-          </MapContainer>
-        </div>
-        <div className="p-4 space-y-4 pb-24">
-          <div className="bg-red-600 text-white rounded-2xl p-4">
-            <h2 className="font-bold text-xl mb-2">{selectedEvent.type}</h2>
-            <p className="text-sm mb-1">Start Time: {selectedEvent.time.split(' - ')[0]}</p>
-            <p className="text-sm mb-1 flex items-center gap-1">
-              <MapPin className="w-4 h-4" />
-              {selectedEvent.location}
-            </p>
-            <p className="text-sm mb-3">
-              Distance: {calculateDistance(userLocation.lat, userLocation.lng, selectedEvent.lat, selectedEvent.lng)} km away
-            </p>
-<div className="bg-white rounded-lg p-3 mb-3">
-              <div className="flex items-center gap-2">
-                <Users className="w-5 h-5 text-blue-500" />
-                <span className="font-bold text-gray-900">
-                  {eventVolunteers[selectedEvent.id] || 0} Volunteer{(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
-                </span>
+    if (currentScreen === 'eventDetail' && selectedEvent) {
+      return (
+        <div className="min-h-screen bg-gray-50">
+          <Header title="Event Details" onBack={() => setCurrentScreen('events')} />
+          <div className="h-64">
+            <MapContainer 
+              center={[selectedEvent.lat, selectedEvent.lng]} 
+              zoom={13} 
+              style={{ height: '100%', width: '100%' }}
+            >
+              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+              <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
+                <Popup>Your Location</Popup>
+              </Marker>
+              <Marker position={[selectedEvent.lat, selectedEvent.lng]} icon={createCustomIcon(selectedEvent.color)}>
+                <Popup>{selectedEvent.type}</Popup>
+              </Marker>
+              <Polyline 
+                positions={[
+                  [userLocation.lat, userLocation.lng],
+                  [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.3, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.3],
+                  [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.7, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.7],
+                  [selectedEvent.lat, selectedEvent.lng]
+                ]} 
+                color="#3B82F6" 
+                weight={4}
+              />
+            </MapContainer>
+          </div>
+          <div className="p-4 space-y-4 pb-24">
+            <div className="bg-red-600 text-white rounded-2xl p-4">
+              <h2 className="font-bold text-xl mb-2">{selectedEvent.type}</h2>
+              <p className="text-sm mb-1">Start Time: {selectedEvent.time.split(' - ')[0]}</p>
+              <p className="text-sm mb-1 flex items-center gap-1">
+                <MapPin className="w-4 h-4" />
+                {selectedEvent.location}
+              </p>
+              <p className="text-sm mb-3">
+                Distance: {calculateDistance(userLocation.lat, userLocation.lng, selectedEvent.lat, selectedEvent.lng)} km away
+              </p>
+              <div className="bg-white rounded-lg p-3 mb-3">
+                <div className="flex items-center gap-2">
+                  <Users className="w-5 h-5 text-blue-500" />
+                  <span className="font-bold text-gray-900">
+                    {eventVolunteers[selectedEvent.id] || 0} Volunteer{(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
+                  </span>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => {
+                    if (!userRespondingTo.includes(selectedEvent.id)) {
+                      setEventVolunteers({
+                        ...eventVolunteers,
+                        [selectedEvent.id]: (eventVolunteers[selectedEvent.id] || 0) + 1
+                      });
+                      setUserRespondingTo([...userRespondingTo, selectedEvent.id]);
+                  
+                      // Add to activity history
+                      setUserActivities(prev => [{
+                        id: Date.now(),
+                        type: 'Volunteer Response',
+                        eventType: selectedEvent.type,
+                        desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
+                        time: `Responded at ${new Date().toLocaleTimeString()}`,
+                        date: new Date().toLocaleDateString('en-GB')
+                      }, ...prev]);
+                    }
+                  }}                
+                  disabled={userRespondingTo.includes(selectedEvent.id)}
+                  className={`${
+                    userRespondingTo.includes(selectedEvent.id) 
+                      ? 'bg-green-500 text-white' 
+                      : 'bg-white text-red-600'
+                  } px-4 py-2 rounded-lg font-medium flex-1 ${
+                    userRespondingTo.includes(selectedEvent.id) ? 'cursor-not-allowed' : 'hover:opacity-90'
+                  }`}
+                >
+                  {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'I am responding'}
+                </button>
+                <button 
+                  className="bg-white bg-opacity-20 p-2 rounded-lg"
+                  onClick={() => {
+                    setCurrentScreen('navigation');
+                  }}
+                >
+                  <Navigation className="w-5 h-5" />
+                </button>
+              </div>
+              <div className="mt-4">
+                <button 
+                  onClick={() => document.getElementById('addMoreMediaInput').click()} 
+                  className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors"
+                >
+                  <div className="flex items-center gap-3">
+                    <Image className="w-5 h-5" />
+                    <span className="font-medium">Add More Media</span>
+                  </div>
+                </button>
+                <input 
+                  id="addMoreMediaInput" 
+                  type="file" 
+                  accept="image/*,video/*" 
+                  multiple 
+                  className="hidden" 
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files);
+                    setMediaFiles(prev => [...prev, ...files]);
+                    alert(`${files.length} file(s) added successfully!`);
+                  }} 
+                />
               </div>
             </div>
-            <div className="flex gap-2">
-              <button 
-	onClick={() => {
-	  if (!userRespondingTo.includes(selectedEvent.id)) {
-    	setEventVolunteers({
-      	...eventVolunteers,
-      	[selectedEvent.id]: (eventVolunteers[selectedEvent.id] || 0) + 1
-    	});
-    	setUserRespondingTo([...userRespondingTo, selectedEvent.id]);
-    
-   	 // Add to activity history
-    	setUserActivities(prev => [{
-      	id: Date.now(),
-      	type: 'Volunteer Response',
-      	eventType: selectedEvent.type,
-      	desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
-      	time: `Responded at ${new Date().toLocaleTimeString()}`,
-      	date: new Date().toLocaleDateString('en-GB')
-    	}, ...prev]);
- 	 }
-}}                
-		disabled={userRespondingTo.includes(selectedEvent.id)}
-                className={`${
-                  userRespondingTo.includes(selectedEvent.id) 
-                    ? 'bg-green-500 text-white' 
-                    : 'bg-white text-red-600'
-                } px-4 py-2 rounded-lg font-medium flex-1 ${
-                  userRespondingTo.includes(selectedEvent.id) ? 'cursor-not-allowed' : 'hover:opacity-90'
-                }`}
-              >
-                {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'I am responding'}
-              </button>
-              <button 
-                className="bg-white bg-opacity-20 p-2 rounded-lg"
-                onClick={() => {
-                  setCurrentScreen('navigation');
-                }}
-              >
-                <Navigation className="w-5 h-5" />
-              </button>
+            <div className="bg-white rounded-2xl p-4">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-bold">Updates</h3>
+                <button className="bg-blue-500 text-white px-4 py-1 rounded-full text-sm">See more</button>
+              </div>
+              <div className="space-y-2">
+                {['Volunteer Arrived at Scene', 'ETA confirmed for Ambulance', 'Paramedic en route'].map((update, idx) => (
+                  <div key={idx} className="bg-red-50 rounded-lg p-3 text-sm">
+                    <p className="text-red-800">{update}</p>
+                    <p className="text-gray-500 text-xs mt-1">{5 + idx * 3} mins ago</p>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-          <div className="bg-white rounded-2xl p-4">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-bold">Updates</h3>
-              <button className="bg-blue-500 text-white px-4 py-1 rounded-full text-sm">See more</button>
-            </div>
-            <div className="space-y-2">
-              {['Volunteer Arrived at Scene', 'ETA confirmed for Ambulance', 'Paramedic en route'].map((update, idx) => (
-                <div key={idx} className="bg-red-50 rounded-lg p-3 text-sm">
-                  <p className="text-red-800">{update}</p>
-                  <p className="text-gray-500 text-xs mt-1">{5 + idx * 3} mins ago</p>
-                </div>
-              ))}
-            </div>
-          </div>
+          <BottomNav currentScreen="events" setCurrentScreen={setCurrentScreen} />
         </div>
-        <BottomNav currentScreen="events" setCurrentScreen={setCurrentScreen} />
-      </div>
-    );
-  }
+      );
+    }
 
   if (currentScreen === 'map') {
     return (
