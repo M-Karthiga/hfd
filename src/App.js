@@ -4,6 +4,25 @@ import L from 'leaflet';
 import { Home, Edit, Menu, User, ChevronRight, MapPin, Phone, Video, Camera, Image, AlertCircle, Navigation, Heart, Cloud, CloudRain, Wind, Thermometer, Activity, Wifi, WifiOff, Radio, Users,PlusCircle, ChevronLeft, Upload } from 'lucide-react';
 import 'leaflet/dist/leaflet.css';
 
+// Firebase (inlined minimal setup)
+import { initializeApp } from "firebase/app";
+import { getAuth, signInAnonymously } from "firebase/auth";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+
+
+// Firestore imports MUST BE AT TOP
+import {
+  getFirestore,
+  collection,
+  addDoc,
+  doc,
+  updateDoc,
+  getDocs,
+  onSnapshot,
+  serverTimestamp,
+  arrayUnion, deleteDoc
+} from "firebase/firestore";
+
 // Fix for default marker icons in Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -55,6 +74,55 @@ const App = () => {
 const [showCallEndDialog, setShowCallEndDialog] = useState(false);
 const [pendingTimerCall, setPendingTimerCall] = useState(null);
 const [routeCoordinates, setRouteCoordinates] = useState([]);
+
+// Context menu state for active events list (right-click)
+const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, event: null });
+
+const handleContextMenu = (e, event) => {
+  e.preventDefault();
+  setContextMenu({
+    visible: true,
+    x: e.clientX,
+    y: e.clientY,
+    event: event
+  });
+};
+
+const hideContextMenu = () => setContextMenu({ visible: false, x: 0, y: 0, event: null });
+
+const deleteCreatedEvent = async (id) => {
+  try {
+    await deleteDoc(doc(db, 'createdEvents', id));
+    setCreatedEvents(prev => prev.filter(ev => ev.id !== id));
+    if (selectedEvent && selectedEvent.id === id) setSelectedEvent(null);
+    hideContextMenu();
+  } catch (err) {
+    console.error('Delete failed', err);
+  }
+};
+
+const startEditEvent = (event) => {
+  // Put the selected event into the create form and open create screen
+  setSelectedEvent(event);
+  setNewEventForm(prev => ({
+    ...prev,
+    incidentType: event.type || prev.incidentType,
+    location: event.location || prev.location,
+    volunteersNeeded: event.volunteersNeeded || prev.volunteersNeeded,
+    suppliesNeeded: event.suppliesNeeded || prev.suppliesNeeded,
+    emergencyServiceStatus: event.emergencyServiceStatus || prev.emergencyServiceStatus,
+    mediaFiles: event.mediaFiles || []
+  }));
+  setCurrentScreen('createEvent');
+  hideContextMenu();
+};
+
+// Global click to hide the context menu
+useEffect(() => {
+  const onDocClick = () => { if (contextMenu.visible) hideContextMenu(); };
+  window.addEventListener('click', onDocClick);
+  return () => window.removeEventListener('click', onDocClick);
+}, [contextMenu.visible]);
 
 const fetchRoute = async (startLat, startLng, endLat, endLng) => {
   try {
@@ -121,16 +189,114 @@ const [nearbyResources, setNearbyResources] = useState([]);
   const [emergencyTimers, setEmergencyTimers] = useState({});
   const [emergencyUpdates, setEmergencyUpdates] = useState([]);
 
+  useEffect(() => {
+    if (currentScreen === 'eventDetail' && selectedEvent) {
+      // Initialize mediaFiles for createdEvents that don't have any
+      if (!selectedEvent.mediaFiles) {
+        selectedEvent.mediaFiles = [];
+      }
+      setMediaFiles(selectedEvent.mediaFiles || []);
+    }
+  }, [currentScreen, selectedEvent]);
+
   // STEP 1: Replace with your WeatherAPI.com API key
   const WEATHER_API_KEY = 'bf8edeaa51844f2caad151032252110';
 
-  const events = [
-    { id: 1, type: 'CVX - Cardiac Event', time: '2:00 - 3:00 PM', location: 'Nearby Street A', color: '#DC2626', lat: userLocation.lat + 0.005, lng: userLocation.lng + 0.003 },
-    { id: 2, type: 'MVA - Motor Vehicle Accident', time: '1:30 - 2:30 PM', location: 'Nearby Street B', color: '#EA580C', lat: userLocation.lat - 0.004, lng: userLocation.lng + 0.006 },
-    { id: 3, type: 'Fall Injury', time: '1:00 - 2:00 PM', location: 'Nearby Plaza', color: '#F59E0B', lat: userLocation.lat + 0.007, lng: userLocation.lng - 0.004 },
-    { id: 4, type: 'Respiratory Distress', time: '12:15 PM', location: 'Local Park', color: '#0891B2', lat: userLocation.lat - 0.003, lng: userLocation.lng - 0.005 },
-    { id: 5, type: 'Stroke - CVA', time: '11:45 AM', location: 'Community Center', color: '#DC2626', lat: userLocation.lat + 0.002, lng: userLocation.lng + 0.008 }
-  ];
+  // --- Firebase init & centralized upload helper ---
+  // Replace these firebaseConfig values with your project's config in production
+  const firebaseConfig = {
+    apiKey: "AIzaSyAWQIO_2SGUprCVggbunCLMXI2mgh5NDaE",
+    authDomain: "hfd1-946b8.firebaseapp.com",
+    projectId: "hfd1-946b8",
+    storageBucket: "hfd1-946b8.firebasestorage.app",
+    messagingSenderId: "4293306151",
+    appId: "1:4293306151:web:ef2705baeb1dab54856b02",
+    measurementId: "G-WTH3PB3JEX"
+  };
+
+  const firebaseApp = initializeApp(firebaseConfig);
+  const auth = getAuth(firebaseApp);
+  // ensure anonymous auth so app can read/write according to rules
+  signInAnonymously(auth).catch(err => console.error('Anonymous auth failed:', err));
+
+  const storage = getStorage(firebaseApp);
+  const db = getFirestore(firebaseApp);
+  
+
+  /**
+   * Centralized upload helper used by multiple upload inputs.
+   * Returns { url, path, name } on success, or null on failure.
+   */
+  const uploadFile = async (file) => {
+    if (!file) return null;
+
+    try {
+      // In production this uploads to Firebase Storage. Here we call uploadBytes.
+      const uniqueName = `${Date.now()}_${file.name}`;
+      const storagePath = `uploads/${uniqueName}`;
+      const fileRef = ref(storage, storagePath);
+
+      // uploadBytes works in browser environment where File is available
+      const snapshot = await uploadBytes(fileRef, file);
+      const url = await getDownloadURL(snapshot.ref);
+
+      return { url, path: storagePath, name: uniqueName };
+    } catch (err) {
+      console.error('uploadFile error:', err);
+      return null;
+    }
+  };
+  // --- end firebase helper ---
+const eventTypeColors = {
+  "Fire": "#DC2626",             // red
+  "Accident": "#EA580C",         // orange
+  "Medical Emergency": "#2563EB",// blue
+  "Natural Disaster": "#9333EA", // purple
+  "Other": "#6B7280"             // gray
+};
+
+const getEventColor = (type) => {
+  if (!type) return "#6B7280";
+  const t = type.toLowerCase();
+
+  if (t.includes("fire")) return "#DC2626";
+  if (t.includes("mva") || t.includes("accident") || t.includes("collision")) return "#EA580C";
+  if (t.includes("cardiac") || t.includes("medical") || t.includes("cva") || t.includes("stroke") || t.includes("respiratory"))
+    return "#2563EB";
+  if (t.includes("natural") || t.includes("disaster") || t.includes("earthquake") || t.includes("flood"))
+    return "#9333EA";
+
+  return "#6B7280";
+};
+  /** Save event to Firestore */
+const saveEventToFirestore = async (eventData) => {
+  try {
+    const docRef = await addDoc(collection(db, "createdEvents"), {
+      ...eventData,
+      createdAt: serverTimestamp(),
+    });
+
+    return docRef.id;
+  } catch (err) {
+    console.error("🔥 Firestore save failed:", err);
+    return null;
+  }
+};
+
+/** Listen for createdEvents in Firestore */
+useEffect(() => {
+  const unsubscribe = onSnapshot(collection(db, "createdEvents"), (snapshot) => {
+    const createdEventsFromDB = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    setCreatedEvents(createdEventsFromDB);
+  });
+
+  return () => unsubscribe();
+}, []);
+
 
   // Mesh Network Manager
   const MeshNetworkManager = useCallback(() => {
@@ -432,12 +598,12 @@ const [nearbyResources, setNearbyResources] = useState([]);
       });
     }
   }, [userLocation, isOnline, WEATHER_API_KEY]);
-// Check for nearby events and send notifications
+// Check for nearby createdEvents and send notifications
   useEffect(() => {
     const checkNearbyEvents = () => {
       if (Notification.permission !== 'granted') return;
       
-      const allEvents = [...events, ...createdEvents];
+      const allEvents = [...createdEvents];
       allEvents.forEach(event => {
         const distance = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng));
         if (distance <= 1) {
@@ -455,13 +621,22 @@ const [nearbyResources, setNearbyResources] = useState([]);
       const interval = setInterval(checkNearbyEvents, 60000); // Check every minute
       return () => clearInterval(interval);
     }
-  }, [userLocation, events, createdEvents, eventVolunteers, locationPermission]);
+  }, [userLocation, createdEvents, eventVolunteers, locationPermission]);
 
   useEffect(() => {
     if (currentScreen === 'splash') {
       setTimeout(() => setCurrentScreen('home'), 2500);
     }
   }, [currentScreen]);
+
+  const eventCodeColors = {
+    action: "bg-red-100 text-red-700",
+    resource: "bg-blue-100 text-blue-700",
+    medical: "bg-green-100 text-green-700",
+    fire: "bg-orange-100 text-orange-700",
+    hospital: "bg-purple-100 text-purple-700",
+    subtype: "bg-gray-200 text-gray-800"
+  };
 
   const eventCodes = {
     action: [
@@ -979,19 +1154,6 @@ const [nearbyResources, setNearbyResources] = useState([]);
             </div>
           )}
 
-
-          {mediaFiles.length > 0 && (
-            <div className="bg-white rounded-2xl p-4">
-              <h3 className="font-semibold mb-2">Uploaded Media ({mediaFiles.length})</h3>
-              <div className="grid grid-cols-3 gap-2">
-                {mediaFiles.map((file, idx) => (
-                  <div key={idx} className="aspect-square bg-gray-200 rounded-lg flex items-center justify-center">
-                    <Camera className="w-6 h-6 text-gray-400" />
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
 
         <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
@@ -1282,7 +1444,7 @@ if (currentScreen === 'navigation') {
  	 )) : (
     	<div className="bg-white rounded-2xl p-6 text-center">
       	<p className="text-gray-500">No activity history yet</p>
-      	<p className="text-sm text-gray-400 mt-2">Your volunteer responses and created events 	will appear here</p>
+      	<p className="text-sm text-gray-400 mt-2">Your volunteer responses and created createdEvents 	will appear here</p>
    	 </div>
   	)}
 	</div>
@@ -1322,7 +1484,11 @@ if (currentScreen === 'navigation') {
               <tbody>
                 {eventCodes[selectedCategory].map((item, idx) => (
                   <tr key={idx} className="border-t border-gray-100">
-                    <td className="px-4 py-3 text-sm font-medium">{item.code}</td>
+                    <td className="px-4 py-3 text-sm font-medium">
+                      <span className={`px-3 py-1 rounded-lg text-xs font-semibold ${eventCodeColors[selectedCategory]}`}>
+                        {item.code}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-sm">{item.subtype || item.resource}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{item.useCase || item.description}</td>
                   </tr>
@@ -1336,18 +1502,265 @@ if (currentScreen === 'navigation') {
     );
   }
 
+  if (currentScreen === 'eventDetail' && selectedEvent) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <Header title="Event Details" onBack={() => setCurrentScreen('createdEvents')} />
+  
+        {/* MAP */}
+        <div className="h-64">
+          <MapContainer 
+            center={[selectedEvent.lat, selectedEvent.lng]} 
+            zoom={13} 
+            style={{ height: '100%', width: '100%' }}
+          >
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
+              <Popup>Your Location</Popup>
+            </Marker>
+            <Marker position={[selectedEvent.lat, selectedEvent.lng]} icon={createCustomIcon(selectedEvent.color)}>
+              <Popup>{selectedEvent.type}</Popup>
+            </Marker>
+            <Polyline 
+              positions={[
+                [userLocation.lat, userLocation.lng],
+                [
+                  userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.3,
+                  userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.3
+                ],
+                [
+                  userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.7,
+                  userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.7
+                ],
+                [selectedEvent.lat, selectedEvent.lng]
+              ]} 
+              color="#3B82F6" 
+              weight={4}
+            />
+          </MapContainer>
+        </div>
+  
+        {/* CONTENT */}
+        <div className="p-4 space-y-4 pb-24">
+  
+          {/* RED EVENT SUMMARY CARD */}
+          <div className="bg-red-600 text-white rounded-2xl p-4">
+            <h2 className="font-bold text-xl mb-2">{selectedEvent.type}</h2>
+            <p className="text-sm mb-1">Start Time: {selectedEvent.time.split(' - ')[0]}</p>
+            <p className="text-sm mb-1 flex items-center gap-1">
+              <MapPin className="w-4 h-4" />
+              {selectedEvent.location}
+            </p>
+            <p className="text-sm mb-3">
+              Distance: {calculateDistance(userLocation.lat, userLocation.lng, selectedEvent.lat, selectedEvent.lng)} km away
+            </p>
+  
+            {/* Volunteers */}
+            <div className="bg-white rounded-lg p-3 mb-3">
+              <div className="flex items-center gap-2">
+                <Users className="w-5 h-5 text-blue-500" />
+                <span className="font-bold text-gray-900">
+                  {eventVolunteers[selectedEvent.id] || 0} Volunteer
+                  {(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
+                </span>
+              </div>
+            </div>
+  
+            {/* Buttons */}
+            <div className="flex gap-2">
+              <button 
+                onClick={() => {
+                  if (!userRespondingTo.includes(selectedEvent.id)) {
+                    setEventVolunteers({
+                      ...eventVolunteers,
+                      [selectedEvent.id]: (eventVolunteers[selectedEvent.id] || 0) + 1
+                    });
+                    setUserRespondingTo([...userRespondingTo, selectedEvent.id]);
+                    setUserActivities(prev => [{
+                      id: Date.now(),
+                      type: 'Volunteer Response',
+                      eventType: selectedEvent.type,
+                      desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
+                      time: `Responded at ${new Date().toLocaleTimeString()}`,
+                      date: new Date().toLocaleDateString('en-GB')
+                    }, ...prev]);
+                  }
+                }}
+                disabled={userRespondingTo.includes(selectedEvent.id)}
+                className={`${
+                  userRespondingTo.includes(selectedEvent.id) 
+                    ? 'bg-green-500 text-white' 
+                    : 'bg-white text-red-600'
+                } px-4 py-2 rounded-lg font-medium flex-1`}
+              >
+                {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'I am responding'}
+              </button>
+
+              <button 
+                className="bg-white bg-opacity-20 p-2 rounded-lg"
+                onClick={() => setCurrentScreen('navigation')}
+              >
+                <Navigation className="w-5 h-5" />
+              </button>
+            </div>
+  
+            {/* ADD MORE MEDIA */}
+            <div className="mt-4">
+              <button 
+                onClick={() => document.getElementById('addMoreMediaInput').click()} 
+                className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800"
+              >
+                <div className="flex items-center gap-3">
+                  <Image className="w-5 h-5" />
+                  <span className="font-medium">Add More Media</span>
+                </div>
+              </button>
+  
+              <input 
+                id="addMoreMediaInput" 
+                type="file" 
+                accept="image/*,video/*" 
+                multiple 
+                className="hidden" 
+                onChange={async (e) => {
+                  const files = Array.from(e.target.files || []);
+                  if (files.length === 0) return;
+
+                  const uploaded = [];
+                  for (const file of files) {
+                    try {
+                      const res = await uploadFile(file);
+                      if (res) {
+                        uploaded.push({
+                          type: file.type.startsWith("image") ? "image" : "video",
+                          url: res.url,
+                          path: res.path,
+                          uploadedAt: Date.now()
+                        });
+                      }
+                    } catch (err) {
+                      console.error("Upload failed:", err);
+                    }
+                  }
+
+                  // 1. Update gallery UI
+                  setMediaFiles((prev) => [...prev, ...uploaded]);
+
+                  // 2. Update selectedEvent locally
+                  setSelectedEvent((prev) => ({
+                    ...prev,
+                    mediaFiles: [...(prev.mediaFiles || []), ...uploaded]
+                  }));
+
+                  // 3. Update createdEvents state
+                  setCreatedEvents((prev) =>
+                    prev.map((ev) =>
+                      ev.id === selectedEvent.id
+                        ? { ...ev, mediaFiles: [...(ev.mediaFiles || []), ...uploaded] }
+                        : ev
+                    )
+                  );
+
+                  // 4. Save to Firestore (THIS WAS MISSING)
+                  try {
+                    const docRef = doc(db, "createdEvents", selectedEvent.id);
+                    await updateDoc(docRef, {
+                      mediaFiles: arrayUnion(...uploaded)
+                    });
+                    console.log("Firestore updated with uploaded media");
+                  } catch (err) {
+                    console.error("Failed to update Firestore:", err);
+                  }
+
+                  alert("Uploaded!");
+                }}
+              />
+            </div>
+          </div>
+  
+          {/* UPDATES */}
+          <div className="bg-white rounded-2xl p-4">
+            <div className="flex justify-between items-center mb-3">
+              <h3 className="font-bold">Updates</h3>
+              <button className="bg-blue-500 text-white px-4 py-1 rounded-full text-sm">See more</button>
+            </div>
+  
+            <div className="space-y-2">
+              {["Volunteer Arrived at Scene", "ETA confirmed for Ambulance", "Paramedic en route"].map((update, idx) => (
+                <div key={idx} className="bg-red-50 rounded-lg p-3 text-sm">
+                  <p className="text-red-800">{update}</p>
+                  <p className="text-gray-500 text-xs mt-1">{5 + idx * 3} mins ago</p>
+                </div>
+              ))}
+            </div>
+          </div>
+  
+          {/* MEDIA GALLERY */}
+          {selectedEvent.mediaFiles && selectedEvent.mediaFiles.length > 0 && (
+            <div className="bg-white rounded-2xl p-4">
+              <h3 className="font-bold mb-2">Event Media</h3>
+              <div className="grid grid-cols-3 gap-3">
+                {selectedEvent.mediaFiles.map((media, idx) => (
+                  <div key={idx} className="rounded-xl overflow-hidden">
+                    {media.type === "image" ? (
+                      <img src={media.url} className="w-full h-full object-cover" />
+                    ) : (
+                      <video src={media.url} controls className="w-full h-full object-cover" />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+  
+        </div>
+        
+        {contextMenu.visible && contextMenu.event && (
+          <div
+            style={{
+              position: "fixed",
+              left: contextMenu.x,
+              top: contextMenu.y,
+              zIndex: 10000
+            }}
+            className="bg-white rounded-md shadow-lg"
+          >
+            <button
+              onClick={() => startEditEvent(contextMenu.event)}
+              className="block w-full text-left px-4 py-2 hover:bg-gray-100"
+            >
+              Edit
+            </button>
+
+            <button
+              onClick={() => deleteCreatedEvent(contextMenu.event.id)}
+              className="block w-full text-left px-4 py-2 text-red-600 hover:bg-gray-100"
+            >
+              Delete
+            </button>
+          </div>
+        )}
+        
+        <BottomNav currentScreen="createdEvents" setCurrentScreen={setCurrentScreen} />
+      </div>
+    );
+  }
+
   if (currentScreen === 'createEvent') {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header title="Create Event" onBack={() => setCurrentScreen('home')} />
+  
         <div className="p-4 space-y-4 pb-24">
           <div className="bg-white rounded-2xl p-4 space-y-4">
+  
+            {/* Incident Type */}
             <div>
               <label className="block text-sm font-semibold mb-2">Incident Type</label>
-              <select 
+              <select
                 className="w-full px-4 py-3 border border-gray-300 rounded-lg"
                 value={newEventForm.incidentType}
-                onChange={(e) => setNewEventForm({...newEventForm, incidentType: e.target.value})}
+                onChange={(e) => setNewEventForm({ ...newEventForm, incidentType: e.target.value })}
               >
                 <option value="">Select incident type</option>
                 <option value="Medical Emergency">Medical Emergency</option>
@@ -1357,52 +1770,55 @@ if (currentScreen === 'navigation') {
                 <option value="Other">Other</option>
               </select>
             </div>
-            
+  
+            {/* Location */}
             <div>
               <label className="block text-sm font-semibold mb-2">Location</label>
-              <input 
-                type="text" 
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
-                placeholder="Enter location" 
+              <input
+                type="text"
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg"
                 value={newEventForm.location || `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`}
-                onChange={(e) => setNewEventForm({...newEventForm, location: e.target.value})}
+                onChange={(e) => setNewEventForm({ ...newEventForm, location: e.target.value })}
               />
             </div>
-            
+  
+            {/* Volunteers Required */}
             <div>
               <label className="block text-sm font-semibold mb-2">Number of Volunteers Required</label>
-              <input 
-                type="number" 
+              <input
+                type="number"
                 min="1"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
-                placeholder="Enter number" 
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg"
                 value={newEventForm.volunteersNeeded}
-                onChange={(e) => setNewEventForm({...newEventForm, volunteersNeeded: parseInt(e.target.value)})}
+                onChange={(e) =>
+                  setNewEventForm({ ...newEventForm, volunteersNeeded: parseInt(e.target.value) })
+                }
               />
             </div>
-            
+  
+            {/* Supplies */}
             <div>
               <label className="block text-sm font-semibold mb-2">Emergency Supplies Needed</label>
-              <textarea 
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg" 
+              <textarea
+                className="w-full px-4 py-3 border border-gray-300 rounded-lg"
                 rows="3"
-                placeholder="List required supplies (e.g., first aid kit, water, blankets)"
                 value={newEventForm.suppliesNeeded}
-                onChange={(e) => setNewEventForm({...newEventForm, suppliesNeeded: e.target.value})}
+                onChange={(e) => setNewEventForm({ ...newEventForm, suppliesNeeded: e.target.value })}
               />
             </div>
-            
+  
+            {/* Emergency Services */}
             <div>
               <label className="block text-sm font-semibold mb-2">Emergency Service Status</label>
               <div className="space-y-2">
-                {['Not Arrived', 'On Route', 'Arrived'].map(status => (
+                {["Not Arrived", "On Route", "Arrived"].map((status) => (
                   <label key={status} className="flex items-center gap-2 cursor-pointer">
-                    <input 
+                    <input
                       type="radio"
                       name="serviceStatus"
                       value={status}
                       checked={newEventForm.emergencyServiceStatus === status}
-                      onChange={(e) => setNewEventForm({...newEventForm, emergencyServiceStatus: e.target.value})}
+                      onChange={(e) => setNewEventForm({ ...newEventForm, emergencyServiceStatus: e.target.value })}
                       className="w-4 h-4"
                     />
                     <span className="text-sm">{status}</span>
@@ -1410,69 +1826,101 @@ if (currentScreen === 'navigation') {
                 ))}
               </div>
             </div>
-            
+  
+            {/* Upload Media */}
             <div>
               <label className="block text-sm font-semibold mb-2">Upload Media</label>
+  
               <div className="space-y-2">
-                <button 
-                  onClick={() => document.getElementById('eventImageInput').click()}
+  
+                {/* IMAGES */}
+                <button
+                  onClick={() => document.getElementById("eventImageInput").click()}
                   className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
                 >
                   <Camera className="w-5 h-5" />
                   <span>Add Photos</span>
                 </button>
-                <input 
-                  id="eventImageInput" 
-                  type="file" 
-                  accept="image/*" 
-                  multiple 
+                <input
+                  id="eventImageInput"
+                  type="file"
+                  accept="image/*"
+                  multiple
                   className="hidden"
                   onChange={(e) => {
                     const files = Array.from(e.target.files);
                     setNewEventForm({
-                      ...newEventForm, 
-                      mediaFiles: [...newEventForm.mediaFiles, ...files.map(f => ({type: 'image', file: f}))]
+                      ...newEventForm,
+                      mediaFiles: [
+                        ...newEventForm.mediaFiles,
+                        ...files.map((f) => ({ type: "image", file: f })),
+                      ],
                     });
                   }}
                 />
-                
-                <button 
-                  onClick={() => document.getElementById('eventVideoInput').click()}
+  
+                {/* VIDEOS */}
+                <button
+                  onClick={() => document.getElementById("eventVideoInput").click()}
                   className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
                 >
                   <Video className="w-5 h-5" />
                   <span>Add Videos</span>
                 </button>
-                <input 
-                  id="eventVideoInput" 
-                  type="file" 
-                  accept="video/*" 
-                  multiple 
+                <input
+                  id="eventVideoInput"
+                  type="file"
+                  accept="video/*"
+                  multiple
                   className="hidden"
                   onChange={(e) => {
                     const files = Array.from(e.target.files);
                     setNewEventForm({
-                      ...newEventForm, 
-                      mediaFiles: [...newEventForm.mediaFiles, ...files.map(f => ({type: 'video', file: f}))]
+                      ...newEventForm,
+                      mediaFiles: [
+                        ...newEventForm.mediaFiles,
+                        ...files.map((f) => ({ type: "video", file: f })),
+                      ],
                     });
                   }}
                 />
               </div>
-              
+  
+              {/* PREVIEW SELECTED FILES */}
               {newEventForm.mediaFiles.length > 0 && (
                 <div className="mt-3">
-                  <p className="text-sm font-medium mb-2">Uploaded: {newEventForm.mediaFiles.length} file(s)</p>
+                  <h3 className="text-lg font-bold mb-2">Uploaded Files</h3>
+                  <p className="text-sm text-gray-600 mb-3">
+                    {newEventForm.mediaFiles.length} file(s)
+                  </p>
+
                   <div className="grid grid-cols-4 gap-2">
                     {newEventForm.mediaFiles.map((media, idx) => (
-                      <div key={idx} className="aspect-square bg-gray-200 rounded-lg flex items-center justify-center relative">
-                        {media.type === 'image' ? <Camera className="w-6 h-6 text-gray-400" /> : <Video className="w-6 h-6 text-gray-400" />}
-                        <button 
-                          onClick={() => {
+                      <div
+                        key={idx}
+                        className="aspect-square bg-gray-200 rounded-lg flex items-center justify-center relative overflow-hidden"
+                      >
+                        {media.type === "image" ? (
+                          <img
+                            src={URL.createObjectURL(media.file)}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <video
+                            src={URL.createObjectURL(media.file)}
+                            className="w-full h-full object-cover"
+                            muted
+                          />
+                        )}
+
+                        {/* DELETE BUTTON */}
+                        <button
+                          onClick={() =>
                             setNewEventForm({
                               ...newEventForm,
-                              mediaFiles: newEventForm.mediaFiles.filter((_, i) => i !== idx)
-                            });
-                          }}
+                              mediaFiles: newEventForm.mediaFiles.filter((_, i) => i !== idx),
+                            })
+                          }
                           className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center text-xs"
                         >
                           ×
@@ -1483,74 +1931,89 @@ if (currentScreen === 'navigation') {
                 </div>
               )}
             </div>
-            
-            <button 
-onClick={() => {
-  if (!newEventForm.incidentType) {
-    alert('Please select an incident type');
-    return;
-  }
-  const newEvent = {
-    id: Date.now(),
-    type: newEventForm.incidentType,
-    location: newEventForm.location || `${userLocation.lat.toFixed(4)}, ${userLocation.lng.toFixed(4)}`,
-    volunteersNeeded: newEventForm.volunteersNeeded,
-    suppliesNeeded: newEventForm.suppliesNeeded,
-    emergencyServiceStatus: newEventForm.emergencyServiceStatus,
-    mediaFiles: newEventForm.mediaFiles,
-    time: new Date().toLocaleTimeString(),
-    color: '#DC2626',
-    lat: userLocation.lat + (Math.random() - 0.5) * 0.02,
-    lng: userLocation.lng + (Math.random() - 0.5) * 0.02
-  };
-  setCreatedEvents([...createdEvents, newEvent]);
-  setEventVolunteers({...eventVolunteers, [newEvent.id]: 0});
+          </div>
   
-  // Add to activity history
-  setUserActivities(prev => [{
-    id: Date.now(),
-    type: 'Event Created',
-    eventType: newEvent.type,
-    desc: `Created ${newEvent.type} event at ${newEvent.location}`,
-    time: `Created at ${new Date().toLocaleTimeString()}`,
-    date: new Date().toLocaleDateString('en-GB')
-  }, ...prev]);
-                
-                // Request notification permission for nearby events
-                if (Notification.permission === 'default') {
-                  Notification.requestPermission().then(permission => {
-                    if (permission === 'granted') {
-                      new Notification('Event Created', {
-                        body: 'Your event has been created successfully!'
-                      });
-                    }
+          {/* SUBMIT BUTTON */}
+          <button
+            onClick={async () => {
+              console.log("FILES TO UPLOAD:", newEventForm.mediaFiles);
+              // 1️⃣ Upload files first
+              const uploadedMedia = [];
+
+              for (const media of newEventForm.mediaFiles) {
+                if (!media.file) continue; // skip if file missing
+
+                const uploaded = await uploadFile(media.file);
+                if (uploaded) {
+                  uploadedMedia.push({
+                    type: media.type,
+                    url: uploaded.url,
+                    path: uploaded.path,
+                    uploadedAt: Date.now(),
                   });
                 }
-                
-                alert('Event created successfully!');
-                setNewEventForm({
-                  incidentType: '',
-                  location: '',
-                  volunteersNeeded: 1,
-                  suppliesNeeded: '',
-                  emergencyServiceStatus: 'Not Arrived',
-                  mediaFiles: []
-                });
-                setCurrentScreen('events');
-              }}
-              className="w-full bg-blue-500 text-white rounded-lg py-3 font-semibold hover:bg-blue-600"
-            >
-              Create Event
-            </button>
-          </div>
+              }
+
+              // 2️⃣ Build event object to store in Firestore
+              const newEventData = {
+                type: newEventForm.incidentType,
+                location: newEventForm.location,
+                lat: userLocation.lat,
+                lng: userLocation.lng,
+                volunteersNeeded: newEventForm.volunteersNeeded,
+                suppliesNeeded: newEventForm.suppliesNeeded,
+                emergencyServiceStatus: newEventForm.emergencyServiceStatus,
+                mediaFiles: uploadedMedia,
+                color: "#DC2626",
+                time: new Date().toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }),
+                createdAt: serverTimestamp(),
+              };
+
+              // 3️⃣ Save to Firestore
+              const docRef = await addDoc(collection(db, "createdEvents"), newEventData);
+
+              // 4️⃣ Add Firestore ID
+              const eventWithId = { ...newEventData, id: docRef.id };
+
+              // 5️⃣ Save locally
+              setCreatedEvents((prev) => [eventWithId, ...prev]);
+
+              // 6️⃣ Navigate to detail
+              setSelectedEvent(eventWithId);
+              setCurrentScreen("eventDetail");
+
+              // Clear the form after successful event creation
+              setNewEventForm({
+                type: "",
+                time: "",
+                location: "",
+                emergencyServiceStatus: "",
+                volunteersNeeded: "",
+                suppliesNeeded: "",
+                mediaFiles: []
+              });
+
+              setMediaFiles([]);
+
+              const photoInput = document.getElementById("createEventPhotoInput");
+              if (photoInput) photoInput.value = "";
+
+              const videoInput = document.getElementById("createEventVideoInput");
+              if (videoInput) videoInput.value = "";
+            }}
+            className="w-full bg-red-600 text-white rounded-xl p-4 text-lg font-semibold"
+          >
+            Create Event
+          </button>
         </div>
-        <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
       </div>
     );
   }
-
-
-  if (currentScreen === 'events') {
+  
+  if (currentScreen === 'createdEvents') {
     return (
       <div className="min-h-screen bg-gray-50">
         <Header title="Active Events" onBack={() => setCurrentScreen('home')} />
@@ -1564,7 +2027,7 @@ onClick={() => {
             <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
               <Popup>Your Location</Popup>
             </Marker>
-	{[...events, ...createdEvents]
+	{[...createdEvents]
         	      .filter(event => {
                 	const distance = parseFloat(calculateDistance(userLocation.lat, 	userLocation.lng, event.lat, event.lng));
                 return distance <= 1;
@@ -1573,10 +2036,11 @@ onClick={() => {
               <Marker
                 key={event.id} 
                 position={[event.lat, event.lng]} 
-                icon={createCustomIcon(event.color)}
+                icon={createCustomIcon(getEventColor(event.type))}
                 eventHandlers={{
                   click: () => {
-                    setSelectedEvent(event);
+                    const full = createdEvents.find(ev => ev.id === event.id) || event;
+                    setSelectedEvent(full);
                     setCurrentScreen('eventDetail');
                   }
                 }}
@@ -1592,7 +2056,7 @@ onClick={() => {
         </div>
 <div className="p-4 space-y-3 pb-24">
           <h3 className="font-bold text-lg">Active Events Within 1km</h3>
-          {[...events, ...createdEvents]
+          {[...createdEvents]
             .filter(event => {
               const distance = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, event.lat, event.lng));
               return distance <= 1;
@@ -1602,7 +2066,13 @@ onClick={() => {
               const distB = parseFloat(calculateDistance(userLocation.lat, userLocation.lng, b.lat, b.lng));
               return distA - distB;
             })
-            .map(event => (            <div key={event.id} onClick={() => { setSelectedEvent(event); setCurrentScreen('eventDetail'); }} className="rounded-2xl p-4 text-white cursor-pointer hover:opacity-90 transition-opacity" style={{ backgroundColor: event.color }}>
+            .map(event => (<div
+              key={event.id}
+              onClick={() => { setSelectedEvent(event); setCurrentScreen('eventDetail'); }}
+              onContextMenu={(e) => handleContextMenu(e, event)}
+              className="rounded-2xl p-4 text-white cursor-pointer hover:opacity-90 transition-opacity"
+              style={{ backgroundColor: getEventColor(event.type) }}
+            >
               <div className="flex justify-between items-start mb-2">
                 <h3 className="font-bold text-lg">{event.type}</h3>
                 <button className="bg-white bg-opacity-20 px-3 py-1 rounded-full text-xs">View Details</button>
@@ -1623,138 +2093,7 @@ onClick={() => {
     );
   }
 
-    if (currentScreen === 'eventDetail' && selectedEvent) {
-      return (
-        <div className="min-h-screen bg-gray-50">
-          <Header title="Event Details" onBack={() => setCurrentScreen('events')} />
-          <div className="h-64">
-            <MapContainer 
-              center={[selectedEvent.lat, selectedEvent.lng]} 
-              zoom={13} 
-              style={{ height: '100%', width: '100%' }}
-            >
-              <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-                <Popup>Your Location</Popup>
-              </Marker>
-              <Marker position={[selectedEvent.lat, selectedEvent.lng]} icon={createCustomIcon(selectedEvent.color)}>
-                <Popup>{selectedEvent.type}</Popup>
-              </Marker>
-              <Polyline 
-                positions={[
-                  [userLocation.lat, userLocation.lng],
-                  [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.3, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.3],
-                  [userLocation.lat + (selectedEvent.lat - userLocation.lat) * 0.7, userLocation.lng + (selectedEvent.lng - userLocation.lng) * 0.7],
-                  [selectedEvent.lat, selectedEvent.lng]
-                ]} 
-                color="#3B82F6" 
-                weight={4}
-              />
-            </MapContainer>
-          </div>
-          <div className="p-4 space-y-4 pb-24">
-            <div className="bg-red-600 text-white rounded-2xl p-4">
-              <h2 className="font-bold text-xl mb-2">{selectedEvent.type}</h2>
-              <p className="text-sm mb-1">Start Time: {selectedEvent.time.split(' - ')[0]}</p>
-              <p className="text-sm mb-1 flex items-center gap-1">
-                <MapPin className="w-4 h-4" />
-                {selectedEvent.location}
-              </p>
-              <p className="text-sm mb-3">
-                Distance: {calculateDistance(userLocation.lat, userLocation.lng, selectedEvent.lat, selectedEvent.lng)} km away
-              </p>
-              <div className="bg-white rounded-lg p-3 mb-3">
-                <div className="flex items-center gap-2">
-                  <Users className="w-5 h-5 text-blue-500" />
-                  <span className="font-bold text-gray-900">
-                    {eventVolunteers[selectedEvent.id] || 0} Volunteer{(eventVolunteers[selectedEvent.id] || 0) !== 1 ? 's' : ''} Responding
-                  </span>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => {
-                    if (!userRespondingTo.includes(selectedEvent.id)) {
-                      setEventVolunteers({
-                        ...eventVolunteers,
-                        [selectedEvent.id]: (eventVolunteers[selectedEvent.id] || 0) + 1
-                      });
-                      setUserRespondingTo([...userRespondingTo, selectedEvent.id]);
-                  
-                      // Add to activity history
-                      setUserActivities(prev => [{
-                        id: Date.now(),
-                        type: 'Volunteer Response',
-                        eventType: selectedEvent.type,
-                        desc: `Volunteered for ${selectedEvent.type} at ${selectedEvent.location}`,
-                        time: `Responded at ${new Date().toLocaleTimeString()}`,
-                        date: new Date().toLocaleDateString('en-GB')
-                      }, ...prev]);
-                    }
-                  }}                
-                  disabled={userRespondingTo.includes(selectedEvent.id)}
-                  className={`${
-                    userRespondingTo.includes(selectedEvent.id) 
-                      ? 'bg-green-500 text-white' 
-                      : 'bg-white text-red-600'
-                  } px-4 py-2 rounded-lg font-medium flex-1 ${
-                    userRespondingTo.includes(selectedEvent.id) ? 'cursor-not-allowed' : 'hover:opacity-90'
-                  }`}
-                >
-                  {userRespondingTo.includes(selectedEvent.id) ? '✓ Responding' : 'I am responding'}
-                </button>
-                <button 
-                  className="bg-white bg-opacity-20 p-2 rounded-lg"
-                  onClick={() => {
-                    setCurrentScreen('navigation');
-                  }}
-                >
-                  <Navigation className="w-5 h-5" />
-                </button>
-              </div>
-              <div className="mt-4">
-                <button 
-                  onClick={() => document.getElementById('addMoreMediaInput').click()} 
-                  className="w-full bg-gray-900 text-white rounded-2xl p-4 flex items-center justify-between hover:bg-gray-800 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <Image className="w-5 h-5" />
-                    <span className="font-medium">Add More Media</span>
-                  </div>
-                </button>
-                <input 
-                  id="addMoreMediaInput" 
-                  type="file" 
-                  accept="image/*,video/*" 
-                  multiple 
-                  className="hidden" 
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files);
-                    setMediaFiles(prev => [...prev, ...files]);
-                    alert(`${files.length} file(s) added successfully!`);
-                  }} 
-                />
-              </div>
-            </div>
-            <div className="bg-white rounded-2xl p-4">
-              <div className="flex justify-between items-center mb-3">
-                <h3 className="font-bold">Updates</h3>
-                <button className="bg-blue-500 text-white px-4 py-1 rounded-full text-sm">See more</button>
-              </div>
-              <div className="space-y-2">
-                {['Volunteer Arrived at Scene', 'ETA confirmed for Ambulance', 'Paramedic en route'].map((update, idx) => (
-                  <div key={idx} className="bg-red-50 rounded-lg p-3 text-sm">
-                    <p className="text-red-800">{update}</p>
-                    <p className="text-gray-500 text-xs mt-1">{5 + idx * 3} mins ago</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-          <BottomNav currentScreen="events" setCurrentScreen={setCurrentScreen} />
-        </div>
-      );
-    }
+
 
   if (currentScreen === 'map') {
     return (
@@ -2273,7 +2612,7 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
     <button onClick={() => setCurrentScreen('home')} className={`flex flex-col items-center ${currentScreen === 'home' ? 'text-blue-500' : 'text-gray-400'}`}>
       <Home className="w-6 h-6" />
     </button>
-    <button onClick={() => setCurrentScreen('events')} className={`flex flex-col items-center ${currentScreen === 'events' || currentScreen === 'eventDetail' ? 'text-blue-500' : 'text-gray-400'}`}>
+    <button onClick={() => setCurrentScreen('createdEvents')} className={`flex flex-col items-center ${currentScreen === 'createdEvents' || currentScreen === 'eventDetail' ? 'text-blue-500' : 'text-gray-400'}`}>
       <AlertCircle className="w-6 h-6" />
     </button>
     <button onClick={() => setCurrentScreen('createEvent')} className={`flex flex-col items-center ${currentScreen === 'createEvent' ? 'text-blue-500' : 'text-gray-400'}`}>
