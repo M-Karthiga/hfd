@@ -117,20 +117,60 @@ const sendChatMessage = (eventId) => {
   setCurrentChatMessage('');
 };
 
+// Replace your existing deleteCreatedEvent function with this
 const deleteCreatedEvent = async (id) => {
-  try {
-    await deleteDoc(doc(db, 'createdEvents', id));
-    setCreatedEvents(prev => prev.filter(ev => ev.id !== id));
-    if (selectedEvent && selectedEvent.id === id) setSelectedEvent(null);
-    hideContextMenu();
-    setCurrentScreen('createdEvents');
+  if (!id) {
+    console.warn("deleteCreatedEvent called with no id");
     setShowDeleteConfirm(false);
     setEventToDelete(null);
+    return;
+  }
+
+  try {
+    // Try to find the event locally first (so we can delete attached media)
+    const ev = createdEvents.find(e => e.id === id) || (selectedEvent && selectedEvent.id === id ? selectedEvent : null);
+
+    // 1) Delete media files in Firebase Storage (best-effort, continue if some fail)
+    if (ev && Array.isArray(ev.mediaFiles) && ev.mediaFiles.length > 0) {
+      await Promise.all(ev.mediaFiles.map(async (m) => {
+        try {
+          if (m.path) {
+            await deleteObject(ref(storage, m.path));
+            console.log("Deleted storage object:", m.path);
+          } else {
+            console.warn("Skipping deleteObject — no path on media item:", m);
+          }
+        } catch (err) {
+          console.warn("Failed to delete storage object (continuing):", err);
+        }
+      }));
+    }
+
+    // 2) Delete Firestore document
+    await deleteDoc(doc(db, 'createdEvents', id));
+
+    // 3) Update local state
+    setCreatedEvents(prev => prev.filter(ev => ev.id !== id));
+    if (selectedEvent && selectedEvent.id === id) {
+      setSelectedEvent(null);
+    }
+
+    // 4) Ensure UI modal / context cleared
+    setShowDeleteConfirm(false);
+    setEventToDelete(null);
+    hideContextMenu();
+
+    // 5) navigate to createdEvents screen
+    setCurrentScreen('createdEvents');
+
+    console.log("Event deleted:", id);
   } catch (err) {
     console.error('Delete failed', err);
+    // Close modal and clear eventToDelete to avoid stuck UI even if deletion fails
+    setShowDeleteConfirm(false);
+    setEventToDelete(null);
   }
 };
-
 const startEditEvent = (event) => {
   // Put the selected event into the create form and open create screen
   setSelectedEvent(event);
@@ -1994,27 +2034,37 @@ if (currentScreen === "eventDetail" && selectedEvent) {
                       <video src={media.url} className="w-full h-full object-cover" />
                     )}
 
+                    // inside the media grid, replace the delete button's onClick handler with this:
                     <button
                       onClick={async (e) => {
                         e.stopPropagation();
 
                         try {
-                          // 1. Delete from Firebase Storage
-                          await deleteObject(ref(storage, media.path));
+                          // 1) Delete the storage object (if path available)
+                          if (media.path) {
+                            await deleteObject(ref(storage, media.path));
+                            console.log("Deleted storage object:", media.path);
+                          } else {
+                            console.warn("Media has no path; skipping storage delete:", media);
+                          }
 
-                          // 2. Prepare updated list
-                          const updated = selectedEvent.mediaFiles.filter((m, i) => i !== idx);
+                          // 2) Build updated media array (remove the item at idx)
+                          const updated = (selectedEvent.mediaFiles || []).filter((m, i) => i !== idx);
 
-                          // 3. Save to Firestore
-                          await updateDoc(doc(db, "createdEvents", selectedEvent.id), {
+                          // 3) Update Firestore doc with the full updated array
+                          const docRef = doc(db, "createdEvents", selectedEvent.id);
+                          await updateDoc(docRef, {
                             mediaFiles: updated
                           });
 
-                          // 4. Update local UI
+                          // 4) Update local UI state so gallery updates immediately
                           setSelectedEvent(prev => ({ ...prev, mediaFiles: updated }));
-                        } 
-                        catch (err) {
+                          setCreatedEvents(prev => prev.map(ev => ev.id === selectedEvent.id ? { ...ev, mediaFiles: updated } : ev));
+
+                          console.log("Media removed and Firestore updated");
+                        } catch (err) {
                           console.error("Media delete failed:", err);
+                          // Optionally show a small toast/alert for the user
                         }
                       }}
                       className="absolute top-1 right-1 bg-red-600 bg-opacity-80 text-white px-2 py-1 rounded text-xs"
