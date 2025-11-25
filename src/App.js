@@ -9,6 +9,12 @@ import { initializeApp } from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
+// imports...
+import { Capacitor } from '@capacitor/core';
+import { Geolocation } from '@capacitor/geolocation';
+import { PushNotifications } from '@capacitor/push-notifications';
+
+
 
 // Firestore imports MUST BE AT TOP
 import {
@@ -23,6 +29,33 @@ import {
   arrayUnion, deleteDoc
 } from "firebase/firestore";
 
+// ---- Add this here ----
+async function requestMobilePermissions() {
+  if (!Capacitor.isNativePlatform()) return;
+
+  try {
+    const locPerm = await Geolocation.requestPermissions();
+    console.log("Loc perm: ", locPerm);
+
+    const notifPerm = await PushNotifications.requestPermissions();
+    if (notifPerm.receive === "granted") {
+      PushNotifications.register();
+    }
+  } catch (err) {
+    console.log("Permission request failed", err);
+  }
+}
+
+async function getCurrentPositionSafe() {
+  if (Capacitor.getPlatform() === "web") {
+    return new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject);
+    });
+  } else {
+    return await Geolocation.getCurrentPosition();
+  }
+}
+
 // Fix for default marker icons in Leaflet
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -30,6 +63,8 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
+
+
 
 // Custom marker icons
 const createCustomIcon = (color) => {
@@ -281,6 +316,13 @@ const fetchNearbyPlaces = async (lat, lng, categories, limit = 3) => {
 // Add state for nearby resources
 const [nearbyResources, setNearbyResources] = useState([]);
 const [selectedResource, setSelectedResource] = useState(null);
+
+useEffect(() => {
+  // Run only on native app (Android/iOS), NOT on laptop web version
+  if (Capacitor.getPlatform() !== 'web') {
+    requestMobilePermissions();
+  }
+}, []);
 
 /* Load resource requests globally */
 useEffect(() => {
@@ -654,42 +696,37 @@ const requestLocation = () => {
   );
 };
 
-  const requestMobileLocation = async () => {
-    try {
-      setShowLocationDialog(false);
-  
-      if (!navigator.geolocation) {
-        alert("Geolocation not supported on this device.");
-        return;
-      }
-  
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setUserLocation({
-            lat: pos.coords.latitude,
-            lng: pos.coords.longitude,
-          });
-          setLocationPermission("granted");
-        },
-        (err) => {
-          console.log("Mobile geolocation error:", err);
-          alert(
-            "Unable to get location. Please enable location permissions in your browser settings."
-          );
-          setLocationPermission("denied");
-        },
-        {
-          enableHighAccuracy: true,
-          timeout: 8000,
-          maximumAge: 0,
-        }
-      );
-    } catch (e) {
-      console.log("Mobile geolocation exception:", e);
-      alert("Error fetching your location.");
+const requestMobileLocation = async () => {
+  try {
+    setShowLocationDialog(false);
+
+    const success = (pos) => {
+      setUserLocation({
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+      });
+      setLocationPermission("granted");
+    };
+
+    const error = (err) => {
+      console.log("Mobile geolocation error:", err);
+      alert("Unable to get location. Please enable location permissions.");
       setLocationPermission("denied");
+    };
+
+    // Unified safe location function
+    try {
+      const pos = await getCurrentPositionSafe();
+      success({ coords: pos.coords });
+    } catch (err) {
+      error(err);
     }
-  };
+  } catch (e) {
+    console.log("Mobile geolocation exception:", e);
+    alert("Error fetching your location.");
+    setLocationPermission("denied");
+  }
+};
   
   <button onClick={requestMobileLocation}>Grant Permission</button>
   
