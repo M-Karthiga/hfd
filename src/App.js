@@ -1995,16 +1995,27 @@ if (currentScreen === "eventDetail" && selectedEvent) {
                     )}
 
                     <button
-                      onClick={(e) => {
+                      onClick={async (e) => {
                         e.stopPropagation();
-                        deleteObject(ref(storage, media.path))
-                          .then(() => {
-                            setSelectedEvent((prev) => ({
-                              ...prev,
-                              mediaFiles: prev.mediaFiles.filter((m, i) => i !== idx),
-                            }));
-                          })
-                          .catch((err) => console.error("Media delete failed:", err));
+
+                        try {
+                          // 1. Delete from Firebase Storage
+                          await deleteObject(ref(storage, media.path));
+
+                          // 2. Prepare updated list
+                          const updated = selectedEvent.mediaFiles.filter((m, i) => i !== idx);
+
+                          // 3. Save to Firestore
+                          await updateDoc(doc(db, "createdEvents", selectedEvent.id), {
+                            mediaFiles: updated
+                          });
+
+                          // 4. Update local UI
+                          setSelectedEvent(prev => ({ ...prev, mediaFiles: updated }));
+                        } 
+                        catch (err) {
+                          console.error("Media delete failed:", err);
+                        }
                       }}
                       className="absolute top-1 right-1 bg-red-600 bg-opacity-80 text-white px-2 py-1 rounded text-xs"
                     >
