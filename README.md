@@ -1,6 +1,6 @@
 # REACH 
 
-Deployment: https://reach-hfd.vercel.app/
+Deployment: https://reach-hfd.vercel.app/ by soumika
 
 ---
 
@@ -25,7 +25,7 @@ We are working on a mobile‑specific optimized version.
 
 Please contact emergency services **only in genuine emergency situations**.
 
-This platform is a prototype meant for research, testing, and development purposes.
+This platform is a prototype and has been done as a course project (ED3010 - Human factors in Desing.
 
 ---
 
