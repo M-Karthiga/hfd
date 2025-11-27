@@ -51,6 +51,26 @@ async function requestMobilePermissions() {
   }
 }
 
+
+async function requestCameraAndMicPermissions() {
+  if (!Capacitor.isNativePlatform()) return;
+
+  try {
+    // CAMERA & GALLERY
+    await Camera.requestPermissions({
+      permissions: ["camera", "photos"]
+    });
+
+    // MICROPHONE
+    await navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(() => console.log("Microphone granted"))
+      .catch(err => console.log("Microphone denied:", err));
+
+  } catch (err) {
+    console.log("Permission request failed:", err);
+  }
+}
+
 async function getCurrentPositionSafe() {
   if (!Capacitor.isNativePlatform()) {
     return new Promise((resolve, reject) => {
@@ -69,6 +89,7 @@ L.Icon.Default.mergeOptions({
   iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon.png',
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
+
 
 
 // 🔎 Reverse-geocode exact address from lat/lng
@@ -131,6 +152,15 @@ const App = () => {
   const [activeEventTab, setActiveEventTab] = useState('updates');
  // Chat/media/recording state (add near your existing chat state block)
 const [recording, setRecording] = useState(false);
+
+const [pushToTalkHintVisible, setPushToTalkHintVisible] = useState(false);
+const showPushToTalkHint = () => { 
+  if (!pushToTalkHintVisible) { 
+    setPushToTalkHintVisible(true); 
+    setTimeout(() => setPushToTalkHintVisible(false), 2500); 
+  } 
+};
+
 const mediaRecorderRef = useRef(null);
 const recordedChunksRef = useRef([]);
 const chatFileInputRef = useRef(null); // hidden file input for chat uploads
@@ -182,6 +212,28 @@ const deleteMediaItem = async (eventId, mediaObj) => {
     console.error("deleteMediaItem failed:", err);
   }
 };
+
+// --- Instagram Style Media Picker (states) ---
+const [showMediaPicker, setShowMediaPicker] = useState(false);
+const [galleryPhotos, setGalleryPhotos] = useState([]);
+
+const openMediaPicker = () => setShowMediaPicker(true);
+const closeMediaPicker = () => setShowMediaPicker(false);
+
+// TEMP mock (Instagram grid). Later we replace with Capacitor Media API.
+useEffect(() => {
+  setGalleryPhotos([
+    "https://picsum.photos/200?1",
+    "https://picsum.photos/200?2",
+    "https://picsum.photos/200?3",
+    "https://picsum.photos/200?4",
+    "https://picsum.photos/200?5",
+    "https://picsum.photos/200?6",
+    "https://picsum.photos/200?7",
+    "https://picsum.photos/200?8",
+    "https://picsum.photos/200?9"
+  ]);
+}, []);
 
 useEffect(() => {
   if (!selectedEvent?.id) return;
@@ -496,6 +548,7 @@ useEffect(() => {
   // Run only on native app (Android/iOS), NOT on laptop web version
   if (Capacitor.getPlatform() !== 'web') {
     requestMobilePermissions();
+    requestCameraAndMicPermissions();
   }
 }, []);
 
@@ -2658,7 +2711,7 @@ if (currentScreen === 'navigation' && selectedResource) {
 
                       {/* File upload */}
                       <button
-                        onClick={() => chatFileInputRef.current?.click()}
+                        onClick={() => { if (isMobile) openMediaPicker(); else chatFileInputRef.current?.click(); }}
                         className="p-2 rounded-lg bg-gray-200"
                       >
                         📎
@@ -2683,24 +2736,86 @@ if (currentScreen === 'navigation' && selectedResource) {
                       </button>
                     </div>
 
-                    {/* Hidden file input */}
-                    <input
-                      ref={chatFileInputRef}
-                      type="file"
-                      accept="image/*,video/*,audio/*"
-                      className="hidden"
-                      onChange={async (e) => {
-                        const f = e.target.files?.[0];
-                        if (!f) return;
+                    {/* Hidden file input (DESKTOP ONLY) */}
+                      {!isMobile && (
+                        <input
+                          ref={chatFileInputRef}
+                          type="file"
+                          accept="image/*,video/*,audio/*"
+                          capture="environment"
+                          className="hidden"
+                          onChange={async (e) => {
+                            const f = e.target.files?.[0];
+                            if (!f) return;
 
-                        let type = "image";
-                        if (f.type.startsWith("video")) type = "video";
-                        if (f.type.startsWith("audio")) type = "audio";
+                            let type = "image";
+                            if (f.type.startsWith("video")) type = "video";
+                            if (f.type.startsWith("audio")) type = "audio";
 
-                        await uploadAndSendMedia(f, type);
-                        e.target.value = null;
-                      }}
-                    />
+                            await uploadAndSendMedia(f, type);
+                            e.target.value = null;
+                          }}
+                        />
+                      )}
+                  </div>
+                )}
+                                {/* --- Instagram-style Media Picker Modal (mobile only) --- */}
+                                {isMobile && showMediaPicker && (
+                  <div className="fixed inset-0 bg-black bg-opacity-60 z-50 flex items-end justify-center">
+                    <div className="bg-white w-full rounded-t-3xl p-4 max-h-[75vh] overflow-y-auto">
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-lg">Select Media</h3>
+                        <button onClick={closeMediaPicker} className="text-2xl">×</button>
+                      </div>
+
+                      {/* Camera tile */}
+                      <div className="grid grid-cols-3 gap-3 mb-3">
+                        <button
+                          className="h-24 bg-gray-200 rounded-lg flex items-center justify-center text-3xl"
+                          onClick={async () => {
+                            try {
+                              const photo = await Camera.getPhoto({ quality: 70, allowEditing: false, resultType: 'uri', source: 'camera' });
+                              const blob = await fetch(photo.webPath).then(r => r.blob());
+                              await uploadAndSendMedia(blob, 'image');
+                              closeMediaPicker();
+                            } catch (err) {
+                              console.log('Camera cancelled or failed', err);
+                            }
+                          }}
+                        >
+                          📷
+                        </button>
+
+                        {/* filler tiles to keep layout even */}
+                        <div className="h-24 rounded-lg bg-transparent" />
+                        <div className="h-24 rounded-lg bg-transparent" />
+                      </div>
+
+                      {/* Gallery grid (uses galleryPhotos state) */}
+                      <div className="grid grid-cols-3 gap-2">
+                        {galleryPhotos.map((src, idx) => (
+                          <button
+                            key={idx}
+                            className="h-28 bg-gray-100 rounded-lg overflow-hidden"
+                            onClick={async () => {
+                              try {
+                                const blob = await fetch(src).then(r => r.blob());
+                                await uploadAndSendMedia(blob, 'image');
+                                closeMediaPicker();
+                              } catch (err) {
+                                console.warn('Failed to pick gallery image', err);
+                              }
+                            }}
+                          >
+                            <img src={src} className="w-full h-full object-cover" />
+                          </button>
+                        ))}
+                      </div>
+
+                      <div className="mt-4">
+                        <button onClick={closeMediaPicker} className="w-full bg-gray-200 py-2 rounded-lg">Cancel</button>
+                      </div>
+                    </div>
                   </div>
                 )}
                 
@@ -2747,25 +2862,28 @@ if (currentScreen === 'navigation' && selectedResource) {
       <p className="text-gray-300 text-sm">No media uploaded yet.</p>
     )}
 
-    <button onClick={() => document.getElementById('addMoreMediaInput').click()} className="w-full bg-white text-black border border-gray-300 rounded-lg p-3 flex items-center justify-center gap-2">
+    <button onClick={() => { if (isMobile) openMediaPicker(); else document.getElementById('addMoreMediaInput').click(); }} className="w-full bg-white text-black border border-gray-300 rounded-lg p-3 flex items-center justify-center gap-2">
       <Upload className="w-5 h-5" /> Add More Media
     </button>
 
-    <input
-      id="addMoreMediaInput"
-      type="file"
-      accept="image/*,video/*,audio/*"
-      multiple
-      className="hidden"
-      onChange={async (e) => {
-        const files = Array.from(e.target.files || []);
-        for (const f of files) {
-          const type = f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
-          await uploadAndSendMedia(f, type);
-        }
-        e.target.value = null;
-      }}
-    />
+    {/* Only render the hidden input on desktop */}
+    {!isMobile && (
+      <input
+        id="addMoreMediaInput"
+        type="file"
+        accept="image/*,video/*,audio/*"
+        multiple
+        className="hidden"
+        onChange={async (e) => {
+          const files = Array.from(e.target.files || []);
+          for (const f of files) {
+            const type = f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
+            await uploadAndSendMedia(f, type);
+          }
+          e.target.value = null;
+        }}
+      />
+    )}
 
     {/* ============ Fullscreen Slideshow Modal ============ */}
     {showFullscreenMedia && selectedEvent && (
@@ -2927,8 +3045,8 @@ if (currentScreen === 'navigation' && selectedResource) {
       <>
       <div className="min-h-screen bg-gray-50">
         <Header title="Create Event" onBack={() => setCurrentScreen('home')} />
-        <div className="p-4 space-y-4 pb-24">
-          <div className="bg-white rounded-2xl p-4 space-y-4">
+        <div className="p-4 space-y-4 pb-4">
+          <div className="bg-white rounded-2xl p-4 space-y-2">
             <div>
               <label className="block text-sm font-semibold mb-2">Incident Type</label>
               <select
@@ -3004,61 +3122,44 @@ if (currentScreen === 'navigation' && selectedResource) {
             {/* Upload Media */}
             <div>
               <label className="block text-sm font-semibold mb-2">Upload Media</label>
-  
-              <div className="space-y-2">
-  
-                {/* IMAGES */}
-                <button
-                  onClick={() => document.getElementById("eventImageInput").click()}
-                  className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
-                >
-                  <Camera className="w-5 h-5" />
-                  <span>Add Photos</span>
-                </button>
+
+              {/* MOBILE → Instagram Picker */}
+              <button
+                onClick={() => {
+                  if (isMobile) openMediaPicker();
+                  else document.getElementById("createEventDesktopInput").click();
+                }}
+                className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
+              >
+                <Upload className="w-5 h-5" />
+                <span>Add Photos / Videos</span>
+              </button>
+
+              {/* DESKTOP ONLY */}
+              {!isMobile && (
                 <input
-                  id="eventImageInput"
+                  id="createEventDesktopInput"
                   type="file"
-                  accept="image/*"
+                  accept="image/*,video/*"
                   multiple
                   className="hidden"
                   onChange={(e) => {
-                    const files = Array.from(e.target.files);
+                    const files = Array.from(e.target.files || []);
                     setNewEventForm({
                       ...newEventForm,
                       mediaFiles: [
                         ...newEventForm.mediaFiles,
-                        ...files.map((f) => ({ type: "image", file: f })),
-                      ],
+                        ...files.map((f) => ({
+                          type: f.type.startsWith("video") ? "video" : "image",
+                          file: f
+                        }))
+                      ]
                     });
+                    e.target.value = null;
                   }}
                 />
-  
-                {/* VIDEOS */}
-                <button
-                  onClick={() => document.getElementById("eventVideoInput").click()}
-                  className="w-full bg-gray-100 text-gray-700 rounded-lg p-4 flex items-center justify-center gap-2 hover:bg-gray-200"
-                >
-                  <Video className="w-5 h-5" />
-                  <span>Add Videos</span>
-                </button>
-                <input
-                  id="eventVideoInput"
-                  type="file"
-                  accept="video/*"
-                  multiple
-                  className="hidden"
-                  onChange={(e) => {
-                    const files = Array.from(e.target.files);
-                    setNewEventForm({
-                      ...newEventForm,
-                      mediaFiles: [
-                        ...newEventForm.mediaFiles,
-                        ...files.map((f) => ({ type: "video", file: f })),
-                      ],
-                    });
-                  }}
-                />
-              </div>
+              )}
+            </div>
   
               {/* PREVIEW SELECTED FILES */}
               {newEventForm.mediaFiles.length > 0 && (
@@ -3205,9 +3306,8 @@ if (currentScreen === 'navigation' && selectedResource) {
             Create Event
           </button>
         </div>
-      </div>
-      <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
-  </>
+        <BottomNav currentScreen={currentScreen} setCurrentScreen={setCurrentScreen} />
+      </>
     );
   }
   
@@ -3218,7 +3318,7 @@ if (currentScreen === 'navigation' && selectedResource) {
           setEditingEvent(null);
           setCurrentScreen('eventDetail');
         }} />
-        <div className="p-4 space-y-4 pb-24">
+        <div className="p-4 pb-24">
           <div className="bg-white rounded-2xl p-4 space-y-4">
             <div>
               <label className="block text-sm font-semibold mb-2">Incident Type</label>
@@ -3958,5 +4058,7 @@ const AudioBubble = ({ url, isMine }) => {
     </div>
   );
 };
+
+
 
 export default App;
