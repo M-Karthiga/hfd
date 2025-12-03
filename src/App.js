@@ -2778,71 +2778,73 @@ if (currentScreen === 'navigation' && selectedResource) {
     </div>
 
     {/* Messages */}
+
     <div className="bg-gray-900 rounded-lg p-3 mb-3 overflow-y-auto flex-1 min-h-0">
-      {(!eventMessages || eventMessages.length === 0) ? (
-        <p className="text-sm text-gray-300 text-center py-4">No messages yet.</p>
-      ) : (
-{eventMessages.map((msg, i) => {
-  const isMine = msg.userId === auth.currentUser?.uid || msg.sender === "You";
-  const isStarred = (eventUpdates[selectedEvent.id] || []).some(u => u.messageId === (msg.id || `msg_${i}`));
-  const timeStr = msg.timestamp
-    ? (msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp))
-        .toLocaleString("en-GB", {
-          hour: "2-digit",
-          minute: "2-digit",
-          day: "2-digit",
-          month: "short",
-        })
-    : "";
+{(!eventMessages || eventMessages.length === 0) ? (
+  <p className="text-sm text-gray-300 text-center py-4">No messages yet.</p>
+) : (
+  eventMessages.map((msg, i) => {  // ✅ CORRECT - removed extra {
+    const isMine = msg.userId === auth.currentUser?.uid || msg.sender === "You";
+    const isStarred = (eventUpdates[selectedEvent.id] || []).some(u => u.messageId === (msg.id || `msg_${i}`));
+    const timeStr = msg.timestamp
+      ? (msg.timestamp.toDate ? msg.timestamp.toDate() : new Date(msg.timestamp))
+          .toLocaleString("en-GB", {
+            hour: "2-digit",
+            minute: "2-digit",
+            day: "2-digit",
+            month: "short",
+          })
+      : "";
 
-  return (
-    <div key={i} className={`mb-3 flex ${isMine ? "justify-end" : "justify-start"}`}>
-      <div className="flex flex-col max-w-[80%]">
-        <div className={`inline-block rounded-lg p-3 ${isMine ? "bg-blue-500 text-white" : "bg-gray-700 text-white"}`}>
-          <div className="text-xs font-semibold mb-1">
-            {msg.sender} {msg.isVolunteer ? "(Volunteer)" : "(Bystander)"}
+    return (
+      <div key={i} className={`mb-3 flex ${isMine ? "justify-end" : "justify-start"}`}>
+        <div className="flex flex-col max-w-[80%]">
+          <div className={`inline-block rounded-lg p-3 ${isMine ? "bg-blue-500 text-white" : "bg-gray-700 text-white"}`}>
+            <div className="text-xs font-semibold mb-1">
+              {msg.sender} {msg.isVolunteer ? "(Volunteer)" : "(Bystander)"}
+            </div>
+
+            {msg.text && <div className="text-sm mb-1">{msg.text}</div>}
+
+            {msg.media?.type === "image" && (
+              <img
+                src={msg.media.url}
+                className="mt-2 rounded-lg"
+                style={{ maxWidth: "180px", maxHeight: "180px", objectFit: "cover" }}
+                alt=""
+              />
+            )}
+
+            {msg.media?.type === "video" && (
+              <video
+                src={msg.media.url}
+                controls
+                className="mt-2 rounded-lg"
+                style={{ maxWidth: "200px" }}
+              />
+            )}
+
+            {msg.media?.type === "audio" && (
+              <audio src={msg.media.url} controls className="mt-2 w-full" />
+            )}
+
+            <div className="text-xs opacity-75 mt-2 text-right">{timeStr}</div>
           </div>
-
-          {msg.text && <div className="text-sm mb-1">{msg.text}</div>}
-
-          {msg.media?.type === "image" && (
-            <img
-              src={msg.media.url}
-              className="mt-2 rounded-lg"
-              style={{ maxWidth: "180px", maxHeight: "180px", objectFit: "cover" }}
-              alt=""
-            />
+          
+          {/* Star button to add to updates */}
+          {msg.text && (
+            <button
+              onClick={() => toggleMessageAsUpdate(selectedEvent.id, msg.id || `msg_${i}`, msg)}
+              className={`text-xs mt-1 px-2 py-1 rounded self-start ${isStarred ? 'bg-yellow-500 text-white' : 'bg-gray-600 text-gray-200'}`}
+            >
+              {isStarred ? '⭐ Starred' : '☆ Add to Updates'}
+            </button>
           )}
-
-          {msg.media?.type === "video" && (
-            <video
-              src={msg.media.url}
-              controls
-              className="mt-2 rounded-lg"
-              style={{ maxWidth: "200px" }}
-            />
-          )}
-
-          {msg.media?.type === "audio" && (
-            <audio src={msg.media.url} controls className="mt-2 w-full" />
-          )}
-
-          <div className="text-xs opacity-75 mt-2 text-right">{timeStr}</div>
         </div>
-        
-        {/* Star button to add to updates */}
-        {msg.text && (
-          <button
-            onClick={() => toggleMessageAsUpdate(selectedEvent.id, msg.id || `msg_${i}`, msg)}
-            className={`text-xs mt-1 px-2 py-1 rounded self-start ${isStarred ? 'bg-yellow-500 text-white' : 'bg-gray-600 text-gray-200'}`}
-          >
-            {isStarred ? '⭐ Starred' : '☆ Add to Updates'}
-          </button>
-        )}
       </div>
-    </div>
-  );
-})}
+    );
+  })
+)}
             : "";
 
           return (
