@@ -70,9 +70,13 @@ L.Icon.Default.mergeOptions({
   shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
 });
 
-const GOOGLE_MAPS_API_KEY = process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY;
-const WEATHER_API_KEY = process.env.NEXT_PUBLIC_WEATHER_API_KEY;
-const GEOAPIFY_API_KEY = process.env.NEXT_PUBLIC_GEOAPIFY_API_KEY;
+const GOOGLE_MAPS_API_KEY = process.env.REACT_APP_GOOGLE_MAPS_API_KEY;
+const WEATHER_API_KEY = process.env.REACT_APP_WEATHER_API_KEY;
+const GEOAPIFY_API_KEY = process.env.REACT_APP_GEOAPIFY_API_KEY;
+
+console.log('Google Maps API Key:', GOOGLE_MAPS_API_KEY ? 'Loaded ✓' : 'Missing ✗');
+console.log('Weather API Key:', WEATHER_API_KEY ? 'Loaded ✓' : 'Missing ✗');
+console.log('Geoapify API Key:', GEOAPIFY_API_KEY ? 'Loaded ✓' : 'Missing ✗');
 
 const decodePolyline = (encoded) => {
   const poly = [];
@@ -106,9 +110,14 @@ const decodePolyline = (encoded) => {
 
 const fetchRoute = async (startLat, startLng, endLat, endLng) => {
   try {
-    // Use your API route instead of direct call
+    if (!GOOGLE_MAPS_API_KEY) {
+      console.warn('No Google Maps API key');
+      return [[startLat, startLng], [endLat, endLng]];
+    }
+
+    // Call Google Directions API directly
     const response = await fetch(
-      `/api/directions?startLat=${startLat}&startLng=${startLng}&endLat=${endLat}&endLng=${endLng}`
+      `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&key=${GOOGLE_MAPS_API_KEY}`
     );
     const data = await response.json();
     
@@ -2561,8 +2570,34 @@ if (currentScreen === 'navigation' && selectedResource) {
                 </div>
               )}
 
-              {/* VOLUNTEERS + RESPOND BUTTON (moved below description) */}
-              <div className="flex items-center justify-between mt-2">
+ {/* TABS: Updates | Chat | Media */}
+              <div className="mt-3 flex justify-center">
+                <div className="inline-flex rounded-lg p-1 bg-black">
+                  <button
+                    onClick={() => setActiveEventTab('updates')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'updates' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Updates
+                  </button>
+
+                  <button
+                    onClick={() => setActiveEventTab('chat')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'chat' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Chat ({(chatMessages[selectedEvent.id] || []).length})
+                  </button>
+
+                  <button
+                    onClick={() => setActiveEventTab('media')}
+                    className={`px-4 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'media' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  >
+                    Media ({(selectedEvent.mediaFiles || []).length})
+                  </button>
+                </div>
+              </div>
+
+              {/* VOLUNTEERS + RESPOND BUTTON (now below tabs) */}
+              <div className="flex items-center justify-between mt-3">
                 <div className="bg-white rounded-lg p-3 text-gray-900 flex items-center gap-2 flex-1">
                   <Users className="w-5 h-5 text-blue-500" />
                   <span className="font-bold">
@@ -2571,80 +2606,59 @@ if (currentScreen === 'navigation' && selectedResource) {
                 </div>
 
                 <div className="flex gap-2">
-  <button 
-  onClick={async () => {
-    console.log('Fetching route from', userLocation, 'to', selectedEvent);
-    
-    try {
-      const routeCoords = await fetchRoute(
-        userLocation.lat, 
-        userLocation.lng, 
-        selectedEvent.lat, 
-        selectedEvent.lng
-      );
-      
-      console.log('Route fetched:', routeCoords.length, 'coordinates');
-      
-      if (routeCoords.length > 0) {
-        setEmergencyRoutes([{ 
-          resource: selectedEvent, 
-          route: routeCoords 
-        }]);
-        setShowEmergencyRoutes(true);
-      } else {
-        alert('Could not fetch route. Using direct line.');
-        setEmergencyRoutes([{
-          resource: selectedEvent,
-          route: [[userLocation.lat, userLocation.lng], [selectedEvent.lat, selectedEvent.lng]]
-        }]);
-        setShowEmergencyRoutes(true);
-      }
-    } catch (err) {
-      console.error('Route fetch error:', err);
-      alert('Failed to fetch route');
-    }
-  }}
-  className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
->
-  <MapPin className="w-5 h-5" />
-</button>
-	  
-  <button 
-    onClick={() => {
-      setSelectedResource(selectedEvent);
-      setCurrentScreen('navigation');
-    }}
-    className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition-colors"
-  >
-    <Navigation className="w-5 h-5" />
-  </button>
-</div>
-
-              {/* TABS: Updates | Chat | Media (black background, unselected text white) */}
-              <div className="mt-3 rounded-lg p-1 bg-black">
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => setActiveEventTab('updates')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'updates' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  <button 
+                    onClick={async () => {
+                      console.log('Fetching route from', userLocation, 'to', selectedEvent);
+                      
+                      try {
+                        const routeCoords = await fetchRoute(
+                          userLocation.lat, 
+                          userLocation.lng, 
+                          selectedEvent.lat, 
+                          selectedEvent.lng
+                        );
+                        
+                        console.log('Route fetched:', routeCoords.length, 'coordinates');
+                        
+                        if (routeCoords.length > 0) {
+                          setEmergencyRoutes([{ 
+                            resource: selectedEvent, 
+                            route: routeCoords 
+                          }]);
+                          setShowEmergencyRoutes(true);
+                        } else {
+                          alert('Could not fetch route. Using direct line.');
+                          setEmergencyRoutes([{
+                            resource: selectedEvent,
+                            route: [[userLocation.lat, userLocation.lng], [selectedEvent.lat, selectedEvent.lng]]
+                          }]);
+                          setShowEmergencyRoutes(true);
+                        }
+                      } catch (err) {
+                        console.error('Route fetch error:', err);
+                        alert('Failed to fetch route');
+                      }
+                    }}
+                    className="bg-green-500 text-white p-2 rounded-lg hover:bg-green-600"
                   >
-                    Updates
+                    <MapPin className="w-5 h-5" />
                   </button>
-
-                  <button
-                    onClick={() => setActiveEventTab('chat')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'chat' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
+                  
+                  <button 
+                    onClick={() => {
+                      setSelectedResource(selectedEvent);
+                      setCurrentScreen('navigation');
+                    }}
+                    className="bg-blue-500 text-white p-2 rounded-lg hover:bg-blue-600 transition-colors"
                   >
-                    Chat ({(chatMessages[selectedEvent.id] || []).length})
-                  </button>
-
-                  <button
-                    onClick={() => setActiveEventTab('media')}
-                    className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium ${activeEventTab === 'media' ? 'bg-white text-black' : 'bg-transparent text-white'}`}
-                  >
-                    Media ({(selectedEvent.mediaFiles || []).length})
+                    <Navigation className="w-5 h-5" />
                   </button>
                 </div>
               </div>
+
+            {/* Keep the rest of the tabs code below unchanged */}
+          <div className="mt-3 flex justify-center" style={{display: 'none'}}>
+
             </div>
           </div>
 
@@ -3718,6 +3732,7 @@ if (currentScreen === 'navigation' && selectedResource) {
             
             <div className="space-y-4 mb-6">
               <div className="flex items-start gap-3 p-3 bg-green-50 rounded-lg">
+                <div className="text-green-600 text-xl"></div>
                 <div>
                   <p className="font-medium text-green-900">Emergency Alerts</p>
                   <p className="text-xs text-green-700">Get notified about nearby emergencies</p>
@@ -3725,6 +3740,7 @@ if (currentScreen === 'navigation' && selectedResource) {
               </div>
               
               <div className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
+                <div className="text-blue-600 text-xl"></div>
                 <div>
                   <p className="font-medium text-blue-900">Weather Warnings</p>
                   <p className="text-xs text-blue-700">Receive severe weather alerts</p>
@@ -3732,6 +3748,7 @@ if (currentScreen === 'navigation' && selectedResource) {
               </div>
               
               <div className="flex items-start gap-3 p-3 bg-purple-50 rounded-lg">
+                <div className="text-purple-600 text-xl"></div>
                 <div>
                   <p className="font-medium text-purple-900">Location Updates</p>
                   <p className="text-xs text-purple-700">Updates when help is nearby</p>
