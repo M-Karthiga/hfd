@@ -3718,7 +3718,6 @@ if (currentScreen === 'navigation' && selectedResource) {
             
             <div className="space-y-4 mb-6">
               <div className="flex items-start gap-3 p-3 bg-green-50 rounded-lg">
-                <div className="text-green-600 text-xl">✓</div>
                 <div>
                   <p className="font-medium text-green-900">Emergency Alerts</p>
                   <p className="text-xs text-green-700">Get notified about nearby emergencies</p>
@@ -3726,7 +3725,6 @@ if (currentScreen === 'navigation' && selectedResource) {
               </div>
               
               <div className="flex items-start gap-3 p-3 bg-blue-50 rounded-lg">
-                <div className="text-blue-600 text-xl">🔔</div>
                 <div>
                   <p className="font-medium text-blue-900">Weather Warnings</p>
                   <p className="text-xs text-blue-700">Receive severe weather alerts</p>
@@ -3734,7 +3732,6 @@ if (currentScreen === 'navigation' && selectedResource) {
               </div>
               
               <div className="flex items-start gap-3 p-3 bg-purple-50 rounded-lg">
-                <div className="text-purple-600 text-xl">📍</div>
                 <div>
                   <p className="font-medium text-purple-900">Location Updates</p>
                   <p className="text-xs text-purple-700">Updates when help is nearby</p>
