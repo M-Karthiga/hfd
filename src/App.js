@@ -572,19 +572,11 @@ useEffect(() => {
 }, [contextMenu.visible]);
 
 
-// Decode Google's polyline format
-
-
 const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
-  if (!GOOGLE_MAPS_API_KEY) {
-    console.warn('⚠️ Google Maps API key not configured. Using mock data.');
-    return [];
-  }
-
   try {
-    const radius = 5000; // 5km radius
+    const radius = 5000; 
     
-    // Map types to Google Places types
+    // Map types to OSM amenity types
     const typeMapping = {
       'healthcare.hospital': 'hospital',
       'service.police': 'police',
@@ -592,35 +584,72 @@ const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
       'healthcare.pharmacy': 'pharmacy'
     };
     
-    const googleType = typeMapping[type] || type.split('.')[1] || 'hospital';
+    const osmType = typeMapping[type] || 'hospital';
     
-	const url = `/api/places?lat=${lat}&lng=${lng}&type=${googleType}&radius=${radius}`;    
-    console.log(`Fetching ${googleType} places...`);
-    const response = await fetch(url);
+    // Use Overpass API (OpenStreetMap data) - no API key needed!
+    const overpassQuery = `
+      [out:json][timeout:25];
+      (
+        node["amenity"="${osmType}"](around:${radius},${lat},${lng});
+        way["amenity"="${osmType}"](around:${radius},${lat},${lng});
+        relation["amenity"="${osmType}"](around:${radius},${lat},${lng});
+      );
+      out center;
+    `;
+    
+    console.log(`Fetching ${osmType} places from OpenStreetMap (${radius}m radius)...`);
+    const response = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      body: overpassQuery,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Overpass API returned ${response.status}`);
+    }
+    
     const data = await response.json();
     
-    if (data.status === 'OK' && data.results && data.results.length > 0) {
-      console.log(`✓ Found ${data.results.length} ${googleType} locations`);
-      return data.results.slice(0, limit).map((place, index) => ({
-        id: place.place_id,
-        name: place.name,
-        type: type.split('.')[0],
-        lat: place.geometry.location.lat,
-        lng: place.geometry.location.lng,
-        status: place.opening_hours?.open_now ? 'Open' : 'Available',
-        address: place.vicinity,
-        distance: calculateDistance(lat, lng, place.geometry.location.lat, place.geometry.location.lng)
-      }));
+    if (data.elements && data.elements.length > 0) {
+      console.log(`✓ Found ${data.elements.length} ${osmType} locations`);
+      
+      const places = data.elements
+        .map((element) => {
+          const placeLat = element.lat || element.center?.lat;
+          const placeLng = element.lon || element.center?.lon;
+          
+          // Skip if no coordinates
+          if (!placeLat || !placeLng) return null;
+          
+          return {
+            id: element.id,
+            name: element.tags?.name || `${osmType.charAt(0).toUpperCase() + osmType.slice(1)} ${element.id}`,
+            type: type.split('.')[0],
+            lat: placeLat,
+            lng: placeLng,
+            status: element.tags?.opening_hours ? 'Check Hours' : 'Available',
+            address: element.tags?.['addr:street'] || element.tags?.['addr:full'] || 'Address not available',
+            distance: calculateDistance(lat, lng, placeLat, placeLng),
+            phone: element.tags?.phone || element.tags?.['contact:phone'] || null
+          };
+        })
+        .filter(place => place !== null); // Remove null entries
+      
+      // Sort by distance and return top results
+      return places
+        .sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance))
+        .slice(0, limit);
     } else {
-      console.log(`No ${googleType} locations found`);
+      console.log(`No ${osmType} locations found within ${radius}m`);
       return [];
     }
   } catch (error) {
-    console.error(`Failed to fetch ${type} places:`, error);
+    console.error(`Failed to fetch ${type} places from OSM:`, error);
     return [];
   }
 };
-
 
 // Add state for nearby resources
 
@@ -1242,74 +1271,14 @@ const requestMobileLocation = async () => {
   }, [userLocation, isOnline, WEATHER_API_KEY]);
 
 // Initialize nearby resources when location is available
+// Initialize nearby resources when location is available
 useEffect(() => {
   const loadNearbyResources = async () => {
     if (userLocation.lat && userLocation.lng) {
-      console.log('Loading nearby emergency resources from Geoapify...');
+      console.log('Loading nearby emergency resources from OpenStreetMap...');
       
-      if (!GOOGLE_MAPS_API_KEY) {
-        // Use mock data if API key not configured
-        const mockResources = [
-          {
-            id: 1,
-            name: 'City General Hospital',
-            type: 'healthcare',
-            lat: userLocation.lat + 0.01,
-            lng: userLocation.lng + 0.01,
-            status: 'Emergency Available',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.01, userLocation.lng + 0.01)
-          },
-          {
-            id: 2,
-            name: 'Community Medical Center',
-            type: 'healthcare',
-            lat: userLocation.lat + 0.015,
-            lng: userLocation.lng - 0.005,
-            status: 'Open 24/7',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.015, userLocation.lng - 0.005)
-          },
-          {
-            id: 3,
-            name: 'District Health Clinic',
-            type: 'healthcare',
-            lat: userLocation.lat - 0.012,
-            lng: userLocation.lng + 0.018,
-            status: 'ICU Available',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat - 0.012, userLocation.lng + 0.018)
-          },
-          {
-            id: 4,
-            name: 'Central Police Station',
-            type: 'service',
-            lat: userLocation.lat - 0.008,
-            lng: userLocation.lng + 0.012,
-            status: 'On Duty',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat - 0.008, userLocation.lng + 0.012)
-          },
-          {
-            id: 5,
-            name: 'North District Police',
-            type: 'service',
-            lat: userLocation.lat + 0.013,
-            lng: userLocation.lng + 0.008,
-            status: '24/7 Active',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.013, userLocation.lng + 0.008)
-          },
-          {
-            id: 6,
-            name: 'Fire Station Alpha',
-            type: 'service',
-            lat: userLocation.lat + 0.017,
-            lng: userLocation.lng - 0.008,
-            status: 'Ready',
-            distance: calculateDistance(userLocation.lat, userLocation.lng, userLocation.lat + 0.017, userLocation.lng - 0.008)
-          }
-        ];
-        
-        mockResources.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
-        setNearbyResources(mockResources);
-      } else {
-        // Fetch real data from Geoapify Places API
+      try {
+        // Fetch real data from OpenStreetMap Overpass API
         const [hospitals, policeStations, fireStations, pharmacies] = await Promise.all([
           fetchNearbyPlaces(userLocation.lat, userLocation.lng, 'healthcare.hospital'),
           fetchNearbyPlaces(userLocation.lat, userLocation.lng, 'service.police'),
@@ -1320,14 +1289,23 @@ useEffect(() => {
         const allResources = [...hospitals, ...policeStations, ...fireStations, ...pharmacies];
         allResources.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
         
-        console.log('✓ All nearby resources loaded:', allResources.length);
-        setNearbyResources(allResources);
+        console.log('✓ All nearby resources loaded from OSM:', allResources.length);
+        
+        if (allResources.length > 0) {
+          setNearbyResources(allResources);
+        } else {
+          console.warn('No resources found nearby. This might be a rural area or API issue.');
+          setNearbyResources([]);
+        }
+      } catch (error) {
+        console.error('Failed to load nearby resources:', error);
+        setNearbyResources([]);
       }
     }
   };
   
   loadNearbyResources();
-}, [userLocation, GEOAPIFY_API_KEY]);
+}, [userLocation]);
 
 // Check for nearby createdEvents and send notifications
 /*******************************
