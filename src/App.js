@@ -9,6 +9,7 @@ import { getAuth, signInAnonymously } from "firebase/auth";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 // imports...
+
 import { Capacitor } from '@capacitor/core';
 import { Geolocation } from '@capacitor/geolocation';
 
@@ -34,7 +35,6 @@ import {
   where,
 } from "firebase/firestore";
 
-// ---- Add this here ----
 async function requestMobilePermissions() {
   if (!Capacitor.isNativePlatform()) return;
 
@@ -78,36 +78,6 @@ console.log('Google Maps API Key:', GOOGLE_MAPS_API_KEY ? 'Loaded ✓' : 'Missin
 console.log('Weather API Key:', WEATHER_API_KEY ? 'Loaded ✓' : 'Missing ✗');
 console.log('Geoapify API Key:', GEOAPIFY_API_KEY ? 'Loaded ✓' : 'Missing ✗');
 
-const decodePolyline = (encoded) => {
-  const poly = [];
-  let index = 0, len = encoded.length;
-  let lat = 0, lng = 0;
-
-  while (index < len) {
-    let b, shift = 0, result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    const dlat = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lat += dlat;
-
-    shift = 0;
-    result = 0;
-    do {
-      b = encoded.charCodeAt(index++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    const dlng = ((result & 1) ? ~(result >> 1) : (result >> 1));
-    lng += dlng;
-
-    poly.push([lat / 1e5, lng / 1e5]);
-  }
-  return poly;
-};
-
 const fetchRoute = async (startLat, startLng, endLat, endLng) => {
   try {
     if (!GOOGLE_MAPS_API_KEY) {
@@ -115,27 +85,40 @@ const fetchRoute = async (startLat, startLng, endLat, endLng) => {
       return [[startLat, startLng], [endLat, endLng]];
     }
 
-    // Call Google Directions API directly
-    const response = await fetch(
-      `https://maps.googleapis.com/maps/api/directions/json?origin=${startLat},${startLng}&destination=${endLat},${endLng}&key=${GOOGLE_MAPS_API_KEY}`
-    );
-    const data = await response.json();
-    
-    if (data.status === 'OK' && data.routes && data.routes[0]) {
-      const polyline = data.routes[0].overview_polyline.points;
-      const coords = decodePolyline(polyline);
-      console.log('✓ Route fetched successfully');
-      return coords;
-    } else {
-      console.warn('Directions API failed:', data.status);
+    // Wait for Google Maps to load
+    if (!window.google || !window.google.maps) {
+      console.warn("Google Maps not loaded yet");
       return [[startLat, startLng], [endLat, endLng]];
     }
+
+    // Use DirectionsService
+    const directionsService = new window.google.maps.DirectionsService();
+
+    return new Promise((resolve) => {
+      directionsService.route(
+        {
+          origin: { lat: startLat, lng: startLng },
+          destination: { lat: endLat, lng: endLng },
+          travelMode: window.google.maps.TravelMode.DRIVING
+        },
+        (result, status) => {
+          if (status === window.google.maps.DirectionsStatus.OK) {
+            const route = result.routes[0];
+            const path = route.overview_path.map(p => [p.lat(), p.lng()]);
+            console.log('✓ Route fetched successfully');
+            resolve(path);
+          } else {
+            console.warn('Directions API failed:', status);
+            resolve([[startLat, startLng], [endLat, endLng]]);
+          }
+        }
+      );
+    });
   } catch (error) {
     console.error('Route fetch failed:', error);
     return [[startLat, startLng], [endLat, endLng]];
   }
 };
-// Reverse-geocode exact address from lat/lng
 
 const fetchExactAddress = async (lat, lng) => {
   try {
@@ -167,6 +150,15 @@ const createCustomIcon = (color) => {
 };
 
 const App = () => {
+    React.useEffect(() => {
+    if (GOOGLE_MAPS_API_KEY && !window.google) {
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=places`;
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    }
+  }, []);
   const [currentScreen, setCurrentScreen] = useState('splash');
   const [selectedEvent, setSelectedEvent] = useState(null);
   const [mediaFiles, setMediaFiles] = useState([]);
@@ -572,98 +564,75 @@ useEffect(() => {
 }, [contextMenu.visible]);
 
 
-const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
-  try {
-    const radius = 3000; // Reduced from 5000m to avoid timeout
-    
-    // Map types to OSM amenity types
-    const typeMapping = {
-      'healthcare.hospital': 'hospital',
-      'service.police': 'police',
-      'service.fire_station': 'fire_station',
-      'healthcare.pharmacy': 'pharmacy'
-    };
-    
-    const osmType = typeMapping[type] || 'hospital';
-    
-    // Simplified query with timeout
-    const overpassQuery = `
-      [out:json][timeout:15];
-      (
-        node["amenity"="${osmType}"](around:${radius},${lat},${lng});
-        way["amenity"="${osmType}"](around:${radius},${lat},${lng});
-      );
-      out center ${limit};
-    `;
-    
-    console.log(`Fetching ${osmType} places from OpenStreetMap (${radius}m radius)...`);
-    
-    // Retry logic
-    let attempts = 0;
-    const maxAttempts = 2;
-    
-    while (attempts < maxAttempts) {
-      try {
-        const response = await fetch('https://overpass-api.de/api/interpreter', {
-          method: 'POST',
-          body: overpassQuery,
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded'
-          },
-          signal: AbortSignal.timeout(10000) // 10 second timeout
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Overpass API returned ${response.status}`);
-        }
-        
-        const data = await response.json();
-        
-        if (data.elements && data.elements.length > 0) {
-          console.log(`✓ Found ${data.elements.length} ${osmType} locations`);
-          
-          const places = data.elements
-            .map((element) => {
-              const placeLat = element.lat || element.center?.lat;
-              const placeLng = element.lon || element.center?.lon;
-              
-              if (!placeLat || !placeLng) return null;
-              
-              return {
-                id: `${type}-${element.id}`,
-                name: element.tags?.name || `${osmType.charAt(0).toUpperCase() + osmType.slice(1)}`,
-                type: type.split('.')[0],
-                lat: placeLat,
-                lng: placeLng,
-                status: 'Available',
-                address: element.tags?.['addr:street'] || 'Address not available',
-                distance: calculateDistance(lat, lng, placeLat, placeLng),
-                phone: element.tags?.phone || element.tags?.['contact:phone'] || null
-              };
-            })
-            .filter(place => place !== null);
-          
-          return places.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
-        } else {
-          console.log(`No ${osmType} locations found within ${radius}m`);
-          return [];
-        }
-      } catch (err) {
-        attempts++;
-        if (attempts >= maxAttempts) {
-          throw err;
-        }
-        console.log(`Retry attempt ${attempts} for ${osmType}...`);
-        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
-      }
-    }
-    
-    return [];
-  } catch (error) {
-    console.error(`Failed to fetch ${type} places from OSM:`, error);
+const fetchNearbyPlaces = async (lat, lng, type, limit = 5) => {
+  if (!GOOGLE_MAPS_API_KEY) {
+    console.warn("Google Maps API Key missing – cannot fetch nearby places");
     return [];
   }
+
+  // Wait for Google Maps to load
+  if (!window.google || !window.google.maps) {
+    console.warn("Google Maps not loaded yet");
+    return [];
+  }
+
+  const typeMap = {
+    'healthcare.hospital': 'hospital',
+    'service.police': 'police',
+    'service.fire_station': 'fire_station',
+    'healthcare.pharmacy': 'pharmacy'
   };
+
+  const googleType = typeMap[type] || 'hospital';
+
+  try {
+    console.log(`Fetching ${googleType}s via Google Places API...`);
+
+    // Create a map instance (required for PlacesService)
+    const mapDiv = document.createElement('div');
+    const map = new window.google.maps.Map(mapDiv);
+
+    // Create PlacesService
+    const service = new window.google.maps.places.PlacesService(map);
+
+    // Make the request
+    return new Promise((resolve) => {
+      service.nearbySearch(
+        {
+          location: { lat, lng },
+          radius: 5000,
+          type: googleType
+        },
+        (results, status) => {
+          if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+            const places = results.slice(0, limit).map(place => ({
+              id: `google-${place.place_id}`,
+              name: place.name || `${googleType.replace('_', ' ')}`,
+              type: type.split('.')[0],
+              lat: place.geometry.location.lat(),
+              lng: place.geometry.location.lng(),
+              address: place.vicinity || 'Address not available',
+              distance: calculateDistance(lat, lng, place.geometry.location.lat(), place.geometry.location.lng()),
+              phone: place.international_phone_number || null,
+              rating: place.rating || null,
+              photo: place.photos?.[0] ? place.photos[0].getUrl({ maxWidth: 400 }) : null,
+              status: place.business_status === 'OPERATIONAL' ? 'Open' : 'Closed'
+            }));
+            
+            console.log(`Found ${places.length} ${googleType}(s) via Google Places`);
+            resolve(places.sort((a, b) => a.distance - b.distance));
+          } else {
+            console.error('Google Places error:', status);
+            resolve([]);
+          }
+        }
+      );
+    });
+  } catch (error) {
+    console.error(`Failed to fetch ${googleType}s from Google Places:`, error);
+    return [];
+  }
+};
   
 useEffect(() => {
   // Run only on native app (Android/iOS), NOT on laptop web version
@@ -4166,71 +4135,28 @@ const BottomNav = ({ currentScreen, setCurrentScreen }) => (
 );
 
 const RouteDisplay = ({ start, end }) => {
-  const [route, setRoute] = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
+  const [route, setRoute] = useState([]);
   const map = useMap();
 
-  React.useEffect(() => {
-    const loadRoute = async () => {
-      if (!start || !end || start.length !== 2 || end.length !== 2) {
-        console.warn('Invalid start/end coordinates');
-        return;
-      }
+  useEffect(() => {
+    if (!start || !end) return;
 
-      setLoading(true);
-      try {
-        console.log(`🗺️ Fetching route from [${start}] to [${end}]`);
-        
-        // Use OSRM (completely free, no API key needed!)
-        const url = `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`;
-        
-        const response = await fetch(url);
-        
-        if (!response.ok) {
-          throw new Error(`OSRM returned ${response.status}`);
-        }
-        
-        const data = await response.json();
-        console.log('OSRM Response:', data);
-        
-        if (data.code === 'Ok' && data.routes && data.routes[0]) {
-          const coordinates = data.routes[0].geometry.coordinates;
-          // Convert [lng, lat] to [lat, lng] for Leaflet
-          const coords = coordinates.map(coord => [coord[1], coord[0]]);
-          console.log(`✅ Route loaded: ${coords.length} points`);
-          setRoute(coords);
-          
-          // Fit map to show entire route
-          if (map && coords.length > 0) {
-            const bounds = L.latLngBounds(coords);
-            map.fitBounds(bounds, { padding: [50, 50] });
-          }
-        } else {
-          console.warn('OSRM returned no valid route, using straight line');
-          setRoute([start, end]);
-        }
-      } catch (err) {
-        console.error('❌ Route loading failed:', err);
-        // Fallback to straight line
-        setRoute([start, end]);
-      } finally {
-        setLoading(false);
+    const getRoute = async () => {
+      const coords = await fetchRoute(start[0], start[1], end[0], end[1]);
+      setRoute(coords);
+
+      if (coords.length > 2 && map) {
+        const bounds = L.latLngBounds(coords);
+        map.fitBounds(bounds, { padding: [50, 50] });
       }
     };
 
-    loadRoute();
-  }, [start[0], start[1], end[0], end[1]]);
+    getRoute();
+  }, [start, end, map]);
 
-  if (route.length === 0) return null;
+  if (route.length < 2) return null;
 
-  return (
-    <Polyline 
-      positions={route} 
-      color="#10B981" 
-      weight={4}
-      opacity={0.8}
-    />
-  );
+  return <Polyline positions={route} color="#10B981" weight={5} opacity={0.8} />;
 };
 
 {/* ================ AudioBubble component ================ */}
