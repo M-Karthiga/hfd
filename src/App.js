@@ -574,7 +574,7 @@ useEffect(() => {
 
 const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
   try {
-    const radius = 5000; 
+    const radius = 3000; // Reduced from 5000m to avoid timeout
     
     // Map types to OSM amenity types
     const typeMapping = {
@@ -586,74 +586,85 @@ const fetchNearbyPlaces = async (lat, lng, type, limit = 3) => {
     
     const osmType = typeMapping[type] || 'hospital';
     
-    // Use Overpass API (OpenStreetMap data) - no API key needed!
+    // Simplified query with timeout
     const overpassQuery = `
-      [out:json][timeout:25];
+      [out:json][timeout:15];
       (
         node["amenity"="${osmType}"](around:${radius},${lat},${lng});
         way["amenity"="${osmType}"](around:${radius},${lat},${lng});
-        relation["amenity"="${osmType}"](around:${radius},${lat},${lng});
       );
-      out center;
+      out center ${limit};
     `;
     
     console.log(`Fetching ${osmType} places from OpenStreetMap (${radius}m radius)...`);
-    const response = await fetch('https://overpass-api.de/api/interpreter', {
-      method: 'POST',
-      body: overpassQuery,
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
+    
+    // Retry logic
+    let attempts = 0;
+    const maxAttempts = 2;
+    
+    while (attempts < maxAttempts) {
+      try {
+        const response = await fetch('https://overpass-api.de/api/interpreter', {
+          method: 'POST',
+          body: overpassQuery,
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          signal: AbortSignal.timeout(10000) // 10 second timeout
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Overpass API returned ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.elements && data.elements.length > 0) {
+          console.log(`✓ Found ${data.elements.length} ${osmType} locations`);
+          
+          const places = data.elements
+            .map((element) => {
+              const placeLat = element.lat || element.center?.lat;
+              const placeLng = element.lon || element.center?.lon;
+              
+              if (!placeLat || !placeLng) return null;
+              
+              return {
+                id: `${type}-${element.id}`,
+                name: element.tags?.name || `${osmType.charAt(0).toUpperCase() + osmType.slice(1)}`,
+                type: type.split('.')[0],
+                lat: placeLat,
+                lng: placeLng,
+                status: 'Available',
+                address: element.tags?.['addr:street'] || 'Address not available',
+                distance: calculateDistance(lat, lng, placeLat, placeLng),
+                phone: element.tags?.phone || element.tags?.['contact:phone'] || null
+              };
+            })
+            .filter(place => place !== null);
+          
+          return places.sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance));
+        } else {
+          console.log(`No ${osmType} locations found within ${radius}m`);
+          return [];
+        }
+      } catch (err) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+          throw err;
+        }
+        console.log(`Retry attempt ${attempts} for ${osmType}...`);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s before retry
       }
-    });
-    
-    if (!response.ok) {
-      throw new Error(`Overpass API returned ${response.status}`);
     }
     
-    const data = await response.json();
-    
-    if (data.elements && data.elements.length > 0) {
-      console.log(`✓ Found ${data.elements.length} ${osmType} locations`);
-      
-      const places = data.elements
-        .map((element) => {
-          const placeLat = element.lat || element.center?.lat;
-          const placeLng = element.lon || element.center?.lon;
-          
-          // Skip if no coordinates
-          if (!placeLat || !placeLng) return null;
-          
-          return {
-            id: element.id,
-            name: element.tags?.name || `${osmType.charAt(0).toUpperCase() + osmType.slice(1)} ${element.id}`,
-            type: type.split('.')[0],
-            lat: placeLat,
-            lng: placeLng,
-            status: element.tags?.opening_hours ? 'Check Hours' : 'Available',
-            address: element.tags?.['addr:street'] || element.tags?.['addr:full'] || 'Address not available',
-            distance: calculateDistance(lat, lng, placeLat, placeLng),
-            phone: element.tags?.phone || element.tags?.['contact:phone'] || null
-          };
-        })
-        .filter(place => place !== null); // Remove null entries
-      
-      // Sort by distance and return top results
-      return places
-        .sort((a, b) => parseFloat(a.distance) - parseFloat(b.distance))
-        .slice(0, limit);
-    } else {
-      console.log(`No ${osmType} locations found within ${radius}m`);
-      return [];
-    }
+    return [];
   } catch (error) {
     console.error(`Failed to fetch ${type} places from OSM:`, error);
     return [];
   }
-};
-
-// Add state for nearby resources
-
-
+  };
+  
 useEffect(() => {
   // Run only on native app (Android/iOS), NOT on laptop web version
   if (Capacitor.getPlatform() !== 'web') {
@@ -1619,7 +1630,7 @@ useEffect(() => {
                 <div>
                   <p className="text-sm text-gray-600 mb-4">✓ Location access enabled</p>
                   <div className="bg-green-50 p-3 rounded-lg mb-4">
-                    <p className="text-xs text-green-800 font-medium">📍 Current Location:</p>
+                    <p className="text-xs text-green-800 font-medium"> Current Location:</p>
                     <p className="text-sm text-green-900 mt-1">Latitude: {userLocation.lat.toFixed(6)}</p>
                     <p className="text-sm text-green-900">Longitude: {userLocation.lng.toFixed(6)}</p>
                   </div>
@@ -1963,21 +1974,22 @@ useEffect(() => {
               />
 {/* User location with navigation icon */}
               <Marker 
-                position={[userLocation.lat, userLocation.lng]} 
-                icon={L.divIcon({
-                  className: 'custom-location-marker',
-                  html: `<div style="background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%); width: 40px; height: 40px; border-radius: 50%; border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2">
-                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
-                      <circle cx="12" cy="10" r="3"></circle>
+              position={[userLocation.lat, userLocation.lng]} 
+              icon={L.divIcon({
+                className: 'custom-location-marker',
+                  html: `<div style="position: relative; width: 20px; height: 40px;">
+                    <div style="background: #3B82F6; width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg); margin-top: -2px; margin-left: 0px;">
+                        <circle cx="12" cy="12" r="5" fill="white"/>
                     </svg>
-                  </div>`,
-                  iconSize: [40, 40],
-                  iconAnchor: [20, 20],
-                })}
-              >
-                <Popup>📍 Your Location</Popup>
-              </Marker>
+                  </div>
+                </div>`,
+                iconSize: [40, 48],
+                iconAnchor: [20, 44],
+              })}
+            >
+              <Popup> Your Location</Popup>
+            </Marker>
               <Circle center={[userLocation.lat, userLocation.lng]} radius={10000} color="#DC2626" fillOpacity={0.1} />
             </MapContainer>
             <div className="absolute top-4 left-4 bg-white px-3 py-2 rounded-lg shadow-lg z-[1000]">
@@ -3482,8 +3494,22 @@ if (currentScreen === 'navigation' && selectedResource) {
             style={{ height: '100%', width: '100%' }}
           >
             <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-              <Popup>Your Location</Popup>
+            <Marker 
+              position={[userLocation.lat, userLocation.lng]} 
+              icon={L.divIcon({
+                className: 'custom-location-marker',
+                  html: `<div style="position: relative; width: 20px; height: 40px;">
+                    <div style="background: #3B82F6; width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg); margin-top: -2px; margin-left: 0px;">
+                        <circle cx="12" cy="12" r="5" fill="white"/>
+                    </svg>
+                  </div>
+                </div>`,
+                iconSize: [40, 48],
+                iconAnchor: [20, 44],
+              })}
+            >
+              <Popup> Your Location</Popup>
             </Marker>
 	{[...createdEvents]
         	      .filter(event => {
@@ -3576,34 +3602,49 @@ if (currentScreen === 'navigation' && selectedResource) {
               style={{ height: '100%', width: '100%' }}
             >
               <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-              <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-                <Popup>Your Location</Popup>
+              <Marker 
+                position={[userLocation.lat, userLocation.lng]} 
+                icon={L.divIcon({
+                  className: 'custom-location-marker',
+                  html: `<div style="position: relative; width: 20px; height: 40px;">
+                    <div style="background: #3B82F6; width: 40px; height: 40px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                      <svg width="20" height="20" viewBox="0 0 24 24" fill="white" style="transform: rotate(45deg); margin-top: -2px; margin-left: 0px;">
+                        <circle cx="12" cy="12" r="5" fill="white"/>
+                      </svg>
+                    </div>
+                  </div>`,
+                  iconSize: [40, 48],
+                  iconAnchor: [20, 44],
+                })}
+              >
+                <Popup> Your Location</Popup>
               </Marker>
               {nearbyResources.map(resource => (
-                <React.Fragment key={resource.id}>
-                  <Marker 
-                    position={[resource.lat, resource.lng]} 
-                    icon={createCustomIcon(
-                      resource.type === 'healthcare' ? '#DC2626' :
-                      resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
-                      resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
-                      '#16A34A'
-                    )}
-                  >
-                    <Popup>
-                      <strong>{resource.name}</strong><br />
-                      {resource.distance} km away<br />
-                      Status: {resource.status}
-                    </Popup>
-                  </Marker>
-                  
-                  {/* Route line from user to this resource */}
-                  <RouteDisplay 
-                    start={[userLocation.lat, userLocation.lng]} 
-                    end={[resource.lat, resource.lng]} 
-                  />
-                </React.Fragment>
-              ))}
+              <Marker 
+                key={resource.id}
+                position={[resource.lat, resource.lng]} 
+                icon={createCustomIcon(
+                  resource.type === 'healthcare' ? '#DC2626' :
+                  resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
+                  resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
+                  '#16A34A'
+                )}
+              >
+                <Popup>
+                  <strong>{resource.name}</strong><br />
+                  {resource.distance} km away<br />
+                  Status: {resource.status}
+                </Popup>
+              </Marker>
+            ))}
+
+            {/* Only show route for selected resource */}
+            {selectedResource && (
+              <RouteDisplay 
+                start={[userLocation.lat, userLocation.lng]} 
+                end={[selectedResource.lat, selectedResource.lng]} 
+              />
+            )}
               <Circle center={[userLocation.lat, userLocation.lng]} radius={2000} color="#3B82F6" fillOpacity={0.05} />
 		{/* Show emergency routes on map */}
 		{showEmergencyRoutes && emergencyRoutes.map((item, idx) => (
