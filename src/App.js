@@ -1189,88 +1189,80 @@ const requestMobileLocation = async () => {
 };
   
   useEffect(() => {
-    const fetchWeather = async () => {
-      if (!WEATHER_API_KEY) {
-        console.warn('⚠️ Weather API key not configured. Using mock data. Get your free key at https://www.weatherapi.com/');
-        setWeather({
-          temp: 28,
-          condition: 'Partly Cloudy',
-          humidity: 65,
-          windSpeed: 12,
-          feelsLike: 30
-        });
-        setWeatherAlerts([]);
-        return;
-      }
-
-      try {
-        console.log('Fetching live weather data from WeatherAPI.com...');
-        const weatherRes = await fetch(
-          `https://api.weatherapi.com/v1/forecast.json?key=${WEATHER_API_KEY}&q=${userLocation.lat},${userLocation.lng}&days=1&aqi=no&alerts=yes`
-        );
-        const weatherData = await weatherRes.json();
+  const fetchWeather = async () => {
+    try {
+      // Use Open-Meteo API (no key required!)
+      console.log('Fetching weather from Open-Meteo (no API key needed)...');
+      const weatherRes = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${userLocation.lat}&longitude=${userLocation.lng}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,weather_code&timezone=auto`
+      );
+      const weatherData = await weatherRes.json();
+      
+      if (weatherData.current) {
+        // Map weather codes to conditions
+        const weatherConditions = {
+          0: 'Clear Sky',
+          1: 'Mainly Clear', 2: 'Partly Cloudy', 3: 'Overcast',
+          45: 'Foggy', 48: 'Foggy',
+          51: 'Light Drizzle', 53: 'Drizzle', 55: 'Heavy Drizzle',
+          61: 'Light Rain', 63: 'Rain', 65: 'Heavy Rain',
+          71: 'Light Snow', 73: 'Snow', 75: 'Heavy Snow',
+          95: 'Thunderstorm'
+        };
         
-        if (weatherData.error) {
-          console.error('Weather API Error:', weatherData.error.message);
-          throw new Error(weatherData.error.message);
-        }
+        const condition = weatherConditions[weatherData.current.weather_code] || 'Partly Cloudy';
         
-        console.log('✓ Live weather data loaded successfully');
+        console.log('✓ Weather data loaded from Open-Meteo');
         setWeather({
-          temp: Math.round(weatherData.current.temp_c),
-          condition: weatherData.current.condition.text,
-          humidity: weatherData.current.humidity,
-          windSpeed: Math.round(weatherData.current.wind_kph),
-          feelsLike: Math.round(weatherData.current.feelslike_c)
+          temp: Math.round(weatherData.current.temperature_2m),
+          condition: condition,
+          humidity: weatherData.current.relative_humidity_2m,
+          windSpeed: Math.round(weatherData.current.wind_speed_10m),
+          feelsLike: Math.round(weatherData.current.temperature_2m)
         });
-
-        if (weatherData.alerts && weatherData.alerts.alert && weatherData.alerts.alert.length > 0) {
-          console.log('⚠️ Active weather alerts found:', weatherData.alerts.alert.length);
-          setWeatherAlerts(weatherData.alerts.alert.map(alert => ({
-            type: alert.event || 'Weather Alert',
-            severity: alert.severity || 'Moderate',
-            category: alert.category || 'General',
-            headline: alert.headline || alert.event,
-            areas: alert.areas || 'Local area',
-            effective: alert.effective,
-            expires: alert.expires,
-            description: alert.desc || alert.instruction || 'Weather alert in effect.'
-          })));
+        
+        // Check for severe weather
+        if ([95, 96, 99].includes(weatherData.current.weather_code)) {
+          setWeatherAlerts([{
+            type: 'Severe Weather',
+            severity: 'High',
+            category: 'Thunderstorm',
+            headline: 'Thunderstorm Alert',
+            areas: 'Your area',
+            description: 'Severe weather detected in your area. Stay indoors if possible.'
+          }]);
         } else {
-          console.log('✓ No active weather alerts');
           setWeatherAlerts([]);
         }
-      } catch (error) {
-        console.error('Failed to fetch weather data:', error);
-        console.error('API URL was:', `https://api.weatherapi.com/v1/forecast.json?key=${WEATHER_API_KEY}&q=${userLocation.lat},${userLocation.lng}&days=1&aqi=no&alerts=yes`);
-
-        setWeather({
-          temp: 28,
-          condition: 'Data Unavailable',
-          humidity: 65,
-          windSpeed: 12,
-          feelsLike: 30
-        });
-        setWeatherAlerts([]);
       }
-    };
-
-    if (isOnline) {
-      fetchWeather();
-      const interval = setInterval(fetchWeather, 300000); // Update every 5 minutes
-      return () => clearInterval(interval);
-    } else {
+    } catch (error) {
+      console.error('Failed to fetch weather data:', error);
       setWeather({
         temp: 28,
-        condition: 'Offline Mode',
+        condition: 'Partly Cloudy',
         humidity: 65,
         windSpeed: 12,
         feelsLike: 30
       });
+      setWeatherAlerts([]);
     }
-  }, [userLocation, isOnline, WEATHER_API_KEY]);
+  };
 
-// Initialize nearby resources when location is available
+  if (isOnline) {
+    fetchWeather();
+    const interval = setInterval(fetchWeather, 300000);
+    return () => clearInterval(interval);
+  } else {
+    setWeather({
+      temp: 28,
+      condition: 'Offline Mode',
+      humidity: 65,
+      windSpeed: 12,
+      feelsLike: 30
+    });
+  }
+  }, [userLocation, isOnline]);
+  
 // Initialize nearby resources when location is available
 useEffect(() => {
   const loadNearbyResources = async () => {
@@ -1969,8 +1961,22 @@ useEffect(() => {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 attribution='&copy; OpenStreetMap'
               />
-              <Marker position={[userLocation.lat, userLocation.lng]} icon={createCustomIcon('#3B82F6')}>
-                <Popup>Your Location</Popup>
+{/* User location with navigation icon */}
+              <Marker 
+                position={[userLocation.lat, userLocation.lng]} 
+                icon={L.divIcon({
+                  className: 'custom-location-marker',
+                  html: `<div style="background: linear-gradient(135deg, #3B82F6 0%, #2563EB 100%); width: 40px; height: 40px; border-radius: 50%; border: 4px solid white; box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center;">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="2">
+                      <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path>
+                      <circle cx="12" cy="10" r="3"></circle>
+                    </svg>
+                  </div>`,
+                  iconSize: [40, 40],
+                  iconAnchor: [20, 20],
+                })}
+              >
+                <Popup>📍 Your Location</Popup>
               </Marker>
               <Circle center={[userLocation.lat, userLocation.lng]} radius={10000} color="#DC2626" fillOpacity={0.1} />
             </MapContainer>
@@ -3574,22 +3580,29 @@ if (currentScreen === 'navigation' && selectedResource) {
                 <Popup>Your Location</Popup>
               </Marker>
               {nearbyResources.map(resource => (
-                <Marker 
-                  key={resource.id} 
-                  position={[resource.lat, resource.lng]} 
-      icon={createCustomIcon(
-        resource.type === 'healthcare' ? '#DC2626' :
-        resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
-        resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
-        '#16A34A'
-  )}
-                >
-                  <Popup>
-                    <strong>{resource.name}</strong><br />
-                    {resource.distance} km away<br />
-                    Status: {resource.status}
-                  </Popup>
-                </Marker>
+                <React.Fragment key={resource.id}>
+                  <Marker 
+                    position={[resource.lat, resource.lng]} 
+                    icon={createCustomIcon(
+                      resource.type === 'healthcare' ? '#DC2626' :
+                      resource.type === 'service' && resource.name.includes('Police') ? '#2563EB' :
+                      resource.type === 'service' && resource.name.includes('Fire') ? '#F59E0B' :
+                      '#16A34A'
+                    )}
+                  >
+                    <Popup>
+                      <strong>{resource.name}</strong><br />
+                      {resource.distance} km away<br />
+                      Status: {resource.status}
+                    </Popup>
+                  </Marker>
+                  
+                  {/* Route line from user to this resource */}
+                  <RouteDisplay 
+                    start={[userLocation.lat, userLocation.lng]} 
+                    end={[resource.lat, resource.lng]} 
+                  />
+                </React.Fragment>
               ))}
               <Circle center={[userLocation.lat, userLocation.lng]} radius={2000} color="#3B82F6" fillOpacity={0.05} />
 		{/* Show emergency routes on map */}
@@ -4118,57 +4131,66 @@ const RouteDisplay = ({ start, end }) => {
 
   React.useEffect(() => {
     const loadRoute = async () => {
+      if (!start || !end || start.length !== 2 || end.length !== 2) {
+        console.warn('Invalid start/end coordinates');
+        return;
+      }
+
       setLoading(true);
       try {
-        const coords = await fetchRoute(start[0], start[1], end[0], end[1]);
-        console.log('Route loaded:', coords.length, 'points');
-        setRoute(coords);
+        console.log(`🗺️ Fetching route from [${start}] to [${end}]`);
         
-        if (coords.length > 2) {
-          const bounds = L.latLngBounds(coords);
-          map.fitBounds(bounds, { padding: [50, 50] });
+        // Use OSRM (completely free, no API key needed!)
+        const url = `https://router.project-osrm.org/route/v1/driving/${start[1]},${start[0]};${end[1]},${end[0]}?overview=full&geometries=geojson`;
+        
+        const response = await fetch(url);
+        
+        if (!response.ok) {
+          throw new Error(`OSRM returned ${response.status}`);
+        }
+        
+        const data = await response.json();
+        console.log('OSRM Response:', data);
+        
+        if (data.code === 'Ok' && data.routes && data.routes[0]) {
+          const coordinates = data.routes[0].geometry.coordinates;
+          // Convert [lng, lat] to [lat, lng] for Leaflet
+          const coords = coordinates.map(coord => [coord[1], coord[0]]);
+          console.log(`✅ Route loaded: ${coords.length} points`);
+          setRoute(coords);
+          
+          // Fit map to show entire route
+          if (map && coords.length > 0) {
+            const bounds = L.latLngBounds(coords);
+            map.fitBounds(bounds, { padding: [50, 50] });
+          }
+        } else {
+          console.warn('OSRM returned no valid route, using straight line');
+          setRoute([start, end]);
         }
       } catch (err) {
-        console.error('Route loading error:', err);
+        console.error('❌ Route loading failed:', err);
+        // Fallback to straight line
+        setRoute([start, end]);
       } finally {
         setLoading(false);
       }
     };
 
     loadRoute();
-  }, [start[0], start[1], end[0], end[1], map]);
-
-  if (loading) {
-    return (
-      <Circle 
-        center={start} 
-        radius={100} 
-        color="#3B82F6" 
-        fillOpacity={0.3}
-      />
-    );
-  }
+  }, [start[0], start[1], end[0], end[1]]);
 
   if (route.length === 0) return null;
 
   return (
-    <>
-      <Polyline 
-        positions={route} 
-        color="#3B82F6" 
-        weight={4}
-        dashArray="10, 5"
-      />
-      <Marker position={start} icon={createCustomIcon('#3B82F6')}>
-        <Popup>Start</Popup>
-      </Marker>
-      <Marker position={end} icon={createCustomIcon('#DC2626')}>
-        <Popup>Destination</Popup>
-      </Marker>
-    </>
+    <Polyline 
+      positions={route} 
+      color="#10B981" 
+      weight={4}
+      opacity={0.8}
+    />
   );
 };
-
 
 {/* ================ AudioBubble component ================ */}
 const AudioBubble = ({ url, isMine }) => {
